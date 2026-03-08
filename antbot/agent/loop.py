@@ -17,11 +17,22 @@ from antbot.agent.memory import MemoryStore
 from antbot.agent.orchestrator import Orchestrator
 from antbot.agent.subagent import SubagentManager
 from antbot.agent.tools.cron import CronTool
+from antbot.agent.tools.docker_tool import DockerTool
 from antbot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, TreeTool, WriteFileTool
+from antbot.agent.tools.git_tool import GitTool
+from antbot.agent.tools.http_tool import HttpTool
 from antbot.agent.tools.message import MessageTool
+from antbot.agent.tools.process_tool import ProcessTool
 from antbot.agent.tools.registry import ToolRegistry
 from antbot.agent.tools.shell import ExecTool
 from antbot.agent.tools.spawn import SpawnTool
+from antbot.agent.tools.strategy import (
+    NativeToolStrategy,
+    ReactToolStrategy,
+    ToolStrategy,
+    select_tools_for_message,
+)
+from antbot.agent.tools.space_tool import SpaceAntTool
 from antbot.agent.tools.web import WebFetchTool, WebSearchTool
 from antbot.bus.events import InboundMessage, OutboundMessage
 from antbot.bus.queue import MessageBus
@@ -59,6 +70,7 @@ class AgentLoop:
         memory_window: int = 100,
         reasoning_effort: str | None = None,
         brave_api_key: str | None = None,
+        searxng_url: str | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
@@ -66,6 +78,9 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        tool_mode: str = "auto",
+        max_tools_per_request: int = 0,
+        fast_path_enabled: bool = True,
     ):
         from antbot.config.schema import ExecToolConfig
         self.bus = bus
@@ -79,10 +94,14 @@ class AgentLoop:
         self.memory_window = memory_window
         self.reasoning_effort = reasoning_effort
         self.brave_api_key = brave_api_key
+        self.searxng_url = searxng_url
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.tool_mode = tool_mode
+        self.max_tools_per_request = max_tools_per_request
+        self.fast_path_enabled = fast_path_enabled
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -96,6 +115,7 @@ class AgentLoop:
             max_tokens=self.max_tokens,
             reasoning_effort=reasoning_effort,
             brave_api_key=brave_api_key,
+            searxng_url=searxng_url,
             web_proxy=web_proxy,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
@@ -135,10 +155,15 @@ class AgentLoop:
             restrict_to_workspace=self.restrict_to_workspace,
             path_append=self.exec_config.path_append,
         ))
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy))
+        self.tools.register(WebSearchTool(api_key=self.brave_api_key, proxy=self.web_proxy, searxng_url=self.searxng_url))
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        self.tools.register(DockerTool())
+        self.tools.register(GitTool(working_dir=str(self.workspace)))
+        self.tools.register(HttpTool())
+        self.tools.register(ProcessTool())
+        self.tools.register(SpaceAntTool())
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
 
@@ -189,6 +214,45 @@ class AgentLoop:
             return f'{tc.name}("{val[:40]}…")' if len(val) > 40 else f'{tc.name}("{val}")'
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
+    def _get_tool_strategy(self) -> ToolStrategy:
+        """Select the tool-calling strategy based on config and model detection."""
+        mode = self.tool_mode
+        if mode == "react":
+            logger.info("Tool strategy: ReAct (forced by config)")
+            return ReactToolStrategy()
+        if mode == "native":
+            logger.info("Tool strategy: Native (forced by config)")
+            return NativeToolStrategy()
+        # auto: detect from model name
+        from antbot.providers.local_detect import detect_native_tool_support
+        if detect_native_tool_support(self.model):
+            return NativeToolStrategy()
+        logger.info("Tool strategy: ReAct (auto-detected for model {})", self.model)
+        return ReactToolStrategy()
+
+    def _get_tool_categories(self) -> dict[str, str]:
+        """Build a mapping of tool_name -> category from the registry."""
+        return {
+            name: (tool.category if hasattr(tool, "category") else "general")
+            for name, tool in self.tools._tools.items()
+        }
+
+    async def _try_fast_path(self, message: str) -> str | None:
+        """Attempt to handle a message via fast-path (no LLM).
+
+        Returns formatted output string on match, or None to fall through.
+        """
+        from antbot.agent.fast_path import FastPathRouter
+
+        router = FastPathRouter()
+        match = router.try_match(message, str(self.workspace))
+        if match is None:
+            return None
+
+        logger.info("Fast-path match: {}({})", match.tool_name, match.arguments)
+        result = await self.tools.execute(match.tool_name, match.arguments)
+        return result
+
     async def _run_agent_loop(
         self,
         initial_messages: list[dict],
@@ -200,17 +264,49 @@ class AgentLoop:
         final_content = None
         tools_used: list[str] = []
 
+        strategy = self._get_tool_strategy()
+        is_react = isinstance(strategy, ReactToolStrategy)
+
         while iteration < self.max_iterations:
             iteration += 1
 
+            # Get tool definitions and optionally filter
+            tool_defs = self.tools.get_definitions()
+            if self.max_tools_per_request > 0 and messages:
+                # Find the last user message for keyword scoring
+                last_user_msg = ""
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        content = m.get("content", "")
+                        last_user_msg = content if isinstance(content, str) else str(content)
+                        break
+                if last_user_msg:
+                    tool_defs = select_tools_for_message(
+                        last_user_msg, tool_defs,
+                        self._get_tool_categories(),
+                        self.max_tools_per_request,
+                    )
+
+            # Let the strategy modify messages and tools
+            prepared_messages, prepared_tools = strategy.prepare_request(messages, tool_defs)
+
+            # In ReAct mode, use lower max_tokens for intermediate turns
+            # (tool calls rarely need more than ~200 tokens)
+            turn_max_tokens = self.max_tokens
+            if is_react and iteration < self.max_iterations:
+                turn_max_tokens = min(self.max_tokens, 1024)
+
             response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
+                messages=prepared_messages,
+                tools=prepared_tools,
                 model=self.model,
                 temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_tokens=turn_max_tokens,
                 reasoning_effort=self.reasoning_effort,
             )
+
+            # Let the strategy parse tool calls from the response
+            response = strategy.parse_response(response)
 
             if response.has_tool_calls:
                 if on_progress:
@@ -219,35 +315,47 @@ class AgentLoop:
                         await on_progress(thought)
                     await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
 
-                tool_call_dicts = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments, ensure_ascii=False)
+                if is_react:
+                    # In ReAct mode, add the raw LLM text as an assistant message
+                    messages = self.context.add_assistant_message(
+                        messages, response.content,
+                    )
+                else:
+                    tool_call_dicts = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments, ensure_ascii=False)
+                            }
                         }
-                    }
-                    for tc in response.tool_calls
-                ]
-                messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
-                    reasoning_content=response.reasoning_content,
-                    thinking_blocks=response.thinking_blocks,
-                )
+                        for tc in response.tool_calls
+                    ]
+                    messages = self.context.add_assistant_message(
+                        messages, response.content, tool_call_dicts,
+                        reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    )
 
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
-                    )
+
+                    if is_react:
+                        # ReAct: inject result as "Observation:" user message
+                        result_msg = strategy.format_tool_result(
+                            tool_call.id, tool_call.name, result,
+                        )
+                        messages.append(result_msg)
+                    else:
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, result
+                        )
             else:
                 clean = self._strip_think(response.content)
-                # Don't persist error responses to session history — they can
-                # poison the context and cause permanent 400 loops (#1303).
                 if response.finish_reason == "error":
                     logger.error("LLM returned error: {}", (clean or "")[:200])
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
@@ -302,6 +410,182 @@ class AgentLoop:
         await self.bus.publish_outbound(OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))
+
+    async def _handle_model_command(self, cmd: str, msg: InboundMessage) -> OutboundMessage:
+        """Handle /model slash command — show, list, or switch models."""
+        parts = cmd.split(None, 1)
+
+        # /model (no args) → show current model + provider info
+        if len(parts) == 1:
+            provider_type = type(self.provider).__name__
+            api_base = getattr(self.provider, 'api_base', None) or "default"
+            lines = [
+                f"**Current model:** `{self.model}`",
+                f"**Provider:** {provider_type}",
+                f"**Endpoint:** `{api_base}`",
+                "",
+                "Usage: `/model <name>` to switch, `/model list` to see available models.",
+            ]
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content="\n".join(lines),
+            )
+
+        arg = parts[1].strip()
+
+        # /model list → query the endpoint for available models
+        if arg.lower() == "list":
+            models, err = await self._fetch_available_models()
+            if models is None:
+                return OutboundMessage(
+                    channel=msg.channel, chat_id=msg.chat_id,
+                    content=f"Could not fetch model list. {err}",
+                )
+            if not models:
+                return OutboundMessage(
+                    channel=msg.channel, chat_id=msg.chat_id,
+                    content="No models available at the endpoint.",
+                )
+            content = self._format_model_tree(models)
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content=content,
+            )
+
+        # /model <name> → switch (with fuzzy matching)
+        resolved = await self._resolve_model_name(arg)
+        if resolved is None:
+            # No match found — use as-is (might be a model not yet downloaded)
+            resolved = arg
+            note = " (not found on endpoint — using as-is)"
+        elif resolved != arg:
+            note = f" (matched from `{arg}`)"
+        else:
+            note = ""
+
+        old_model = self.model
+        self.model = resolved
+        if hasattr(self.provider, "default_model"):
+            self.provider.default_model = resolved
+        logger.info("Model switched: {} → {}", old_model, resolved)
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=f"Model switched: `{old_model}` → `{resolved}`{note}",
+        )
+
+    async def _resolve_model_name(self, name: str) -> str | None:
+        """Resolve a partial/short model name to a full model ID.
+
+        Tries: exact match, suffix match (e.g. 'GLM-4.7-Flash-4bit'),
+        case-insensitive substring match. Returns None if no match.
+        """
+        models, _ = await self._fetch_available_models()
+        if not models:
+            return None
+
+        ids = [m["id"] for m in models]
+        name_lower = name.lower()
+
+        # Exact match
+        if name in ids:
+            return name
+
+        # Suffix match (user typed short name without org prefix)
+        for mid in ids:
+            if mid.endswith("/" + name) or mid.endswith("--" + name):
+                return mid
+            # Also match the part after the last /
+            short = mid.split("/")[-1]
+            if short == name:
+                return mid
+
+        # Case-insensitive substring
+        for mid in ids:
+            if name_lower in mid.lower():
+                return mid
+
+        return None
+
+    async def _fetch_available_models(self) -> tuple[list[dict] | None, str]:
+        """Query the provider's /v1/models endpoint for available models.
+
+        Returns (model_info_list, error_message). Each dict has:
+            id, family, base_model, quantization, size_gb, capabilities
+        model_info_list is None on failure.
+        """
+        try:
+            client = getattr(self.provider, "_client", None)
+            if client and hasattr(client, "models"):
+                result = await client.models.list()
+                models = []
+                for m in result.data:
+                    raw = m.model_extra or {} if hasattr(m, "model_extra") else {}
+                    size_mb = raw.get("storage_size_megabytes", 0)
+                    models.append({
+                        "id": m.id,
+                        "family": (raw.get("family") or "").lower(),
+                        "base_model": raw.get("base_model") or "",
+                        "quantization": raw.get("quantization") or "",
+                        "size_gb": round(size_mb / 1024, 1) if size_mb else 0,
+                        "capabilities": raw.get("capabilities") or [],
+                    })
+                models.sort(key=lambda x: (x["family"] or "zzz", x["id"]))
+                return models, ""
+            return None, "Provider does not support model listing."
+        except Exception as e:
+            logger.debug("Failed to fetch models: {}", e)
+            err = str(e)
+            if "Connection" in err or "connect" in err.lower():
+                api_base = getattr(self.provider, 'api_base', 'unknown')
+                return None, f"Endpoint unreachable: `{api_base}`"
+            return None, f"Error: {err[:200]}"
+
+    def _format_model_tree(self, models: list[dict]) -> str:
+        """Format models as a grouped tree view with metadata."""
+        from collections import defaultdict
+
+        # Group by family
+        families: dict[str, list[dict]] = defaultdict(list)
+        for m in models:
+            family = m["family"] or "other"
+            families[family].append(m)
+
+        total = len(models)
+        lines = [f"**Models ({total})** — `/model <id>` to switch\n"]
+
+        family_order = sorted(families.keys())
+        for fi, family in enumerate(family_order):
+            members = families[family]
+            is_last_family = fi == len(family_order) - 1
+            branch = "└─" if is_last_family else "├─"
+            lines.append(f"{branch} **{family.upper()}** ({len(members)})")
+
+            for mi, m in enumerate(members):
+                is_last = mi == len(members) - 1
+                vert = "   " if is_last_family else "│  "
+                node = "└─" if is_last else "├─"
+
+                # Build info tags
+                tags = []
+                if m["quantization"]:
+                    tags.append(m["quantization"])
+                if m["size_gb"]:
+                    tags.append(f"{m['size_gb']}GB")
+                caps = m.get("capabilities", [])
+                if "thinking" in caps:
+                    tags.append("think")
+                if "code" in caps:
+                    tags.append("code")
+
+                tag_str = f"  [{', '.join(tags)}]" if tags else ""
+                active = " **<< active**" if m["id"] == self.model else ""
+
+                # Show short name (strip mlx-community/ prefix for readability)
+                short = m["id"].split("/", 1)[-1] if "/" in m["id"] else m["id"]
+                lines.append(f"{vert}{node} `{short}`{tag_str}{active}")
+
+        lines.append(f"\n_Use full ID to switch, e.g._ `/model {models[0]['id']}`")
+        return "\n".join(lines)
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
@@ -401,9 +685,12 @@ class AgentLoop:
             self.sessions.invalidate(session.key)
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="New session started.")
+        if cmd == "/model" or cmd.startswith("/model "):
+            # Use original casing for model names (cmd is lowercased)
+            return await self._handle_model_command(msg.content.strip(), msg)
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 antbot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
+                                  content="🐈 antbot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/model — Show or switch active model\n/help — Show available commands")
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if (unconsolidated >= self.memory_window and session.key not in self._consolidating):
@@ -437,6 +724,15 @@ class AgentLoop:
             ))
 
         progress_fn = on_progress or _bus_progress
+
+        # Fast-path: direct tool execution without LLM for simple read-only queries
+        if self.fast_path_enabled:
+            fast_result = await self._try_fast_path(msg.content)
+            if fast_result is not None:
+                return OutboundMessage(
+                    channel=msg.channel, chat_id=msg.chat_id,
+                    content=fast_result, metadata=msg.metadata or {},
+                )
 
         # Orchestrator: analyze task and decide execution strategy
         if self.orchestrator.should_plan(msg.content):

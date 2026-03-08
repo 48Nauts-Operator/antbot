@@ -234,6 +234,9 @@ class AgentDefaults(Base):
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
     guard_enabled: bool = True  # Enable Guard safety layer
     planner_enabled: bool = True  # Enable Planner for automatic task chunking
+    tool_mode: str = "auto"  # "auto" | "native" | "react" — tool calling strategy
+    max_tools_per_request: int = 0  # 0 = send all tools, >0 = smart selection per message
+    fast_path_enabled: bool = True  # Bypass LLM for simple read-only commands (ls, git status, etc.)
 
 
 class AgentsConfig(Base):
@@ -292,6 +295,7 @@ class WebSearchConfig(Base):
     """Web search tool configuration."""
 
     api_key: str = ""  # Brave Search API key
+    searxng_url: str = ""  # Self-hosted SearXNG instance URL (e.g. http://100.82.210.3:9017)
     max_results: int = 5
 
 

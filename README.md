@@ -35,6 +35,11 @@ AntBot comes with these tools built in:
 | `message` | Send messages to chat channels |
 | `cron` | Schedule tasks and reminders (cron expressions, intervals, one-shot) |
 | `spawn` | Run background subagents for parallel tasks |
+| `docker` | Inspect containers, logs, stats (read-only) |
+| `git` | Status, diff, log, branch, show (read-only) |
+| `http_request` | REST API testing (GET/POST/PUT/DELETE/PATCH) |
+| `process` | List processes, check ports (read-only) |
+| `space_ant` | Scan and clean disk waste (caches, ML models, Docker, Xcode, etc.) |
 | **MCP** | Connect to any MCP-compatible tool server |
 
 Plus the full **Skills** system — drop a `SKILL.md` into `~/.antbot/workspace/skills/your-skill/` and AntBot picks it up automatically.
@@ -74,6 +79,48 @@ Every tool call gets a safety review before execution. Pattern-based, no second 
 Coordinates the flow: Planner → Guard → Executor. For chunked tasks, each batch gets a **fresh context** — the model never accumulates stale data. Intermediate results are saved to disk and merged in a final synthesis step.
 
 This is what makes small local models viable for large tasks. A 27B model with a 32K context window can process 10,000 files — it just does it in batches.
+
+### Dual-Mode Tool Calling (`antbot/agent/tools/strategy.py`)
+
+Not all local models support OpenAI-style function calling. AntBot auto-detects the model's capability and picks the right strategy:
+
+- **Native mode** — for models with built-in function calling (GPT, Claude, Qwen, Gemma 3). Tools are passed as OpenAI `tools` parameter. Zero overhead.
+- **ReAct mode** — for models without native tool support. Injects `Thought → Action → Observation` prompts and parses the model's text output into tool calls.
+
+Detection is automatic (`tool_mode: "auto"` in config), or you can force a mode. Smart tool selection scores tools by relevance to the user's message, so smaller models aren't overwhelmed with 15+ tool definitions.
+
+### DevOps Tools
+
+A suite of read-only inspection tools for infrastructure work:
+
+| Tool | Actions |
+|---|---|
+| `docker` | `ps`, `logs`, `inspect`, `stats` |
+| `git` | `status`, `diff`, `log`, `branch`, `show` |
+| `http_request` | `GET`, `POST`, `PUT`, `DELETE`, `PATCH` |
+| `process` | `list`, `ports`, `check` |
+| `space_ant` | `scan` (report waste), `clean` (remove safe targets) |
+
+All DevOps tools are categorized so smart tool selection picks them when relevant.
+
+### Space-Ant (`antbot/agent/tools/space_tool.py`)
+
+Disk space analyzer that scans for waste across multiple categories:
+
+- **Caches** — pip, npm, cargo, Homebrew, system caches
+- **ML Models** — EXO, Hugging Face, Ollama model downloads (per-model breakdown)
+- **Dev Artifacts** — `node_modules`, `__pycache__`, `.tox`, `.mypy_cache`
+- **Docker** — images, volumes, build cache
+- **Xcode** — iOS DeviceSupport, DerivedData, DocumentationCache
+- **Temp/Installers** — `.dmg`, `.pkg`, `.iso` in Downloads
+
+`scan` is read-only. `clean` requires `confirm=true` and handles Xcode caches, Docker prune, Homebrew cleanup, Ollama models, installers, temp files, and dev waste.
+
+### Fast-Path Dispatcher (`antbot/agent/fast_path.py`)
+
+Simple read-only queries (like `ls`, `git status`, `docker ps`, `disk usage`) are intercepted before they reach the LLM. Pattern matching routes them directly to the right tool — instant response, zero tokens spent.
+
+A write-intent gate prevents dangerous commands from bypassing the LLM's judgment. Keywords like `delete`, `remove`, `create` always go through the full agent loop.
 
 ### JSON Repair (`antbot/utils/json_repair.py`)
 
@@ -145,20 +192,28 @@ Or manually edit `~/.antbot/config.json`:
 {
   "agents": {
     "defaults": {
-      "model": "google/gemma-3-27b",
+      "model": "mlx-community/GLM-4.7-Flash-4bit",
       "provider": "custom"
     }
   },
   "providers": {
     "custom": {
       "apiKey": "local",
-      "apiBase": "http://localhost:1234/v1"
+      "apiBase": "http://localhost:52415/v1"
+    }
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "searxngUrl": "http://your-searxng-instance:9017",
+        "apiKey": ""
+      }
     }
   }
 }
 ```
 
-Point `apiBase` at wherever your LLM is running. That's it.
+Point `apiBase` at wherever your LLM is running (Exo, LM Studio, Ollama). For web search, set either `searxngUrl` (self-hosted SearXNG) or `apiKey` (Brave Search API).
 
 ### 4. Run
 
@@ -173,15 +228,34 @@ antbot agent -m "List the files in my Downloads"
 antbot agent -m "Hello" --logs
 ```
 
+### Slash Commands
+
+In interactive chat, these commands are available:
+
+| Command | What It Does |
+|---|---|
+| `/model` | Show current model, provider, and endpoint |
+| `/model list` | List all available models from endpoint (grouped tree view) |
+| `/model <name>` | Switch model at runtime (fuzzy matching — short names work) |
+| `/new` | Start a fresh conversation (archives memory) |
+| `/stop` | Cancel all running tasks |
+| `/help` | Show available commands |
+
+Model switching is instant — no restart needed. Short names resolve automatically (e.g. `/model GLM-4.7-Flash-4bit` finds `mlx-community/GLM-4.7-Flash-4bit`).
+
 ## Recommended Models
 
-| Model | RAM | Best For |
-|---|---|---|
-| Gemma 3 9B | 6GB | Quick tasks, single tool calls |
-| Gemma 3 27B | 18GB | Multi-step workflows, good tool calling |
-| Qwen3-30B (Q4) | 18GB | Multi-step workflows, scripts |
-| Llama 3.1-70B (Q4) | 40GB | Complex reasoning, synthesis |
-| Qwen3-235B (Q4, via Exo) | 120GB | Near cloud-level quality |
+For reliable tool calling, you need **20B+ active parameters**. MoE models with small active params (e.g. A3B = 3B active) struggle with multi-step reasoning.
+
+| Model | Size | Active Params | Best For |
+|---|---|---|---|
+| GLM-4.7-Flash-4bit | 18GB | ~18B (dense) | Everyday tasks, good tool calling, thinking capable |
+| Llama-3.3-70B-Instruct-4bit | 38GB | 70B (dense) | Complex reasoning, proven instruction following |
+| Qwen3-235B-A22B-4bit | 132GB | 22B (MoE) | Heavy multi-step tasks (via Exo cluster) |
+| Qwen3-Coder-Next-4bit | 43GB | dense | Code-focused tasks, structured output |
+| Gemma 3 27B | 18GB | 27B (dense) | Good all-rounder, solid tool calling |
+
+**Avoid for tool calling:** anything with A3B (3B active), or under 8B dense — too small for ReAct reasoning.
 
 ## Chat Channels
 
@@ -215,27 +289,35 @@ Enable any channel in `~/.antbot/config.json`. Each channel has its own allow-li
 ```
 antbot/
 ├── agent/
-│   ├── loop.py              # Core agent loop (executor)
+│   ├── loop.py              # Core agent loop (executor + slash commands)
 │   ├── planner.py           # Task measurement and planning
 │   ├── guard.py             # Tool call safety review
 │   ├── orchestrator.py      # Planner → Guard → Executor flow
+│   ├── fast_path.py         # Regex-based fast-path dispatcher
 │   ├── context.py           # System prompt and context builder
 │   ├── memory.py            # Two-layer memory (MEMORY.md + HISTORY.md)
 │   ├── skills.py            # Extensible skills system
 │   ├── subagent.py          # Background subagent manager
 │   └── tools/
+│       ├── strategy.py      # Native vs ReAct tool-calling strategies
+│       ├── react_prompt.py  # ReAct prompt templates
 │       ├── filesystem.py    # read, write, edit, list_dir, tree
 │       ├── shell.py         # exec (with safety guards)
-│       ├── web.py           # web_search, web_fetch
+│       ├── web.py           # web_search (Brave + SearXNG), web_fetch
+│       ├── docker_tool.py   # Docker inspection (ps, logs, stats)
+│       ├── git_tool.py      # Git operations (status, diff, log)
+│       ├── http_tool.py     # HTTP requests (REST API testing)
+│       ├── process_tool.py  # Process and port inspection
+│       ├── space_tool.py    # Disk space analyzer + cleaner
 │       ├── mcp.py           # MCP server connections
 │       ├── cron.py          # Task scheduling
 │       ├── message.py       # Channel messaging
 │       ├── spawn.py         # Subagent spawning
 │       └── registry.py      # Tool registry with Guard integration
 ├── providers/
-│   ├── local_detect.py      # Auto-detect LM Studio / Exo / Ollama
-│   └── ...                  # LiteLLM-based provider system
-├── channels/                # Telegram, Discord, WhatsApp, etc.
+│   ├── local_detect.py      # Auto-detect model capabilities + tool support
+│   └── ...                  # LiteLLM + Custom + Azure provider system
+├── channels/                # Telegram, Discord, WhatsApp, Slack, etc.
 ├── config/                  # Pydantic config schema
 ├── utils/
 │   └── json_repair.py       # Fix malformed JSON from local models

@@ -39,6 +39,11 @@ class Tool(ABC):
         """JSON Schema for tool parameters."""
         pass
 
+    @property
+    def category(self) -> str:
+        """Tool category for smart selection (filesystem, shell, web, scheduling, communication, devops)."""
+        return "general"
+
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str:
         """

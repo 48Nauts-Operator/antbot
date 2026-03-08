@@ -45,7 +45,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web using Brave Search API or a self-hosted SearXNG instance."""
 
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -58,10 +58,12 @@ class WebSearchTool(Tool):
         "required": ["query"]
     }
 
-    def __init__(self, api_key: str | None = None, max_results: int = 5, proxy: str | None = None):
+    def __init__(self, api_key: str | None = None, max_results: int = 5,
+                 proxy: str | None = None, searxng_url: str | None = None):
         self._init_api_key = api_key
         self.max_results = max_results
         self.proxy = proxy
+        self.searxng_url = (searxng_url or "").rstrip("/") or None
 
     @property
     def api_key(self) -> str:
@@ -69,26 +71,59 @@ class WebSearchTool(Tool):
         return self._init_api_key or os.environ.get("BRAVE_API_KEY", "")
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
+        n = min(max(count or self.max_results, 1), 10)
+
+        # Prefer SearXNG if configured, fall back to Brave
+        if self.searxng_url:
+            return await self._search_searxng(query, n)
+        return await self._search_brave(query, n)
+
+    async def _search_searxng(self, query: str, count: int) -> str:
+        """Search via self-hosted SearXNG instance."""
+        try:
+            logger.debug("WebSearch (SearXNG): {}", self.searxng_url)
+            async with httpx.AsyncClient(proxy=self.proxy) as client:
+                r = await client.get(
+                    f"{self.searxng_url}/search",
+                    params={"q": query, "format": "json", "pageno": 1},
+                    timeout=10.0,
+                )
+                r.raise_for_status()
+
+            results = r.json().get("results", [])[:count]
+            if not results:
+                return f"No results for: {query}"
+
+            lines = [f"Results for: {query}\n"]
+            for i, item in enumerate(results, 1):
+                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
+                if desc := item.get("content"):
+                    lines.append(f"   {desc}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("WebSearch (SearXNG) error: {}", e)
+            return f"Error: {e}"
+
+    async def _search_brave(self, query: str, count: int) -> str:
+        """Search via Brave Search API."""
         if not self.api_key:
             return (
-                "Error: Brave Search API key not configured. Set it in "
-                "~/.antbot/config.json under tools.web.search.apiKey "
-                "(or export BRAVE_API_KEY), then restart the gateway."
+                "Error: No search backend configured. Set either "
+                "tools.web.search.searxngUrl (self-hosted) or "
+                "tools.web.search.apiKey (Brave) in ~/.antbot/config.json."
             )
-
         try:
-            n = min(max(count or self.max_results, 1), 10)
-            logger.debug("WebSearch: {}", "proxy enabled" if self.proxy else "direct connection")
+            logger.debug("WebSearch (Brave): {}", "proxy enabled" if self.proxy else "direct connection")
             async with httpx.AsyncClient(proxy=self.proxy) as client:
                 r = await client.get(
                     "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
+                    params={"q": query, "count": count},
                     headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
                     timeout=10.0
                 )
                 r.raise_for_status()
 
-            results = r.json().get("web", {}).get("results", [])[:n]
+            results = r.json().get("web", {}).get("results", [])[:count]
             if not results:
                 return f"No results for: {query}"
 

@@ -74,3 +74,55 @@ async def get_best_local_endpoint() -> LocalEndpoint | None:
 def add_custom_endpoint(name: str, api_base: str) -> None:
     """Register an additional endpoint to probe during detection."""
     _KNOWN_ENDPOINTS.append((name, api_base))
+
+
+# --- Native tool-calling detection ---
+
+# Models known to support OpenAI-style function calling reliably.
+_NATIVE_TOOL_MODELS = frozenset({
+    "qwen2.5", "qwen2", "qwen3",
+    "llama-3.1", "llama-3.2", "llama-3.3", "llama3.1", "llama3.2", "llama3.3",
+    "mistral", "mixtral",
+    "hermes", "nous-hermes",
+    "functionary",
+    "command-r", "command-r-plus",
+    "firefunction",
+    "nexusraven",
+    "gorilla",
+})
+
+# Models known to NOT support function calling (text-only output).
+_TEXT_ONLY_MODELS = frozenset({
+    "gemma", "gemma2", "gemma3",
+    "phi", "phi-2", "phi-3", "phi-4",
+    "codellama", "code-llama",
+    "deepseek-coder", "deepseek-v2",
+    "starcoder", "starcoder2",
+    "yi",
+    "tinyllama",
+    "stablelm",
+    "falcon",
+    "mpt",
+})
+
+
+def detect_native_tool_support(model_name: str) -> bool:
+    """Detect whether a model supports native OpenAI-style function calling.
+
+    Returns True for models known to handle the ``tools`` parameter,
+    False for text-only models, and True (optimistic) for unknown models.
+    """
+    name = model_name.lower().replace("_", "-")
+
+    # Check native-support list first
+    for pattern in _NATIVE_TOOL_MODELS:
+        if pattern in name:
+            return True
+
+    # Check text-only list
+    for pattern in _TEXT_ONLY_MODELS:
+        if pattern in name:
+            return False
+
+    # Unknown model — optimistic default
+    return True

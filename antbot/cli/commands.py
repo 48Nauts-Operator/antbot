@@ -333,6 +333,7 @@ def gateway(
         memory_window=config.agents.defaults.memory_window,
         reasoning_effort=config.agents.defaults.reasoning_effort,
         brave_api_key=config.tools.web.search.api_key or None,
+        searxng_url=config.tools.web.search.searxng_url or None,
         web_proxy=config.tools.web.proxy or None,
         exec_config=config.tools.exec,
         cron_service=cron,
@@ -340,6 +341,9 @@ def gateway(
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        tool_mode=config.agents.defaults.tool_mode,
+        max_tools_per_request=config.agents.defaults.max_tools_per_request,
+        fast_path_enabled=config.agents.defaults.fast_path_enabled,
     )
 
     # Set cron callback (needs agent)
@@ -518,12 +522,16 @@ def agent(
         memory_window=config.agents.defaults.memory_window,
         reasoning_effort=config.agents.defaults.reasoning_effort,
         brave_api_key=config.tools.web.search.api_key or None,
+        searxng_url=config.tools.web.search.searxng_url or None,
         web_proxy=config.tools.web.proxy or None,
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        tool_mode=config.agents.defaults.tool_mode,
+        max_tools_per_request=config.agents.defaults.max_tools_per_request,
+        fast_path_enabled=config.agents.defaults.fast_path_enabled,
     )
 
     # Show spinner when logs are off (no output to miss); skip when logs are on
