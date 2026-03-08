@@ -116,6 +116,8 @@ Disk space analyzer that scans for waste across multiple categories:
 
 `scan` is read-only. `clean` requires `confirm=true` and handles Xcode caches, Docker prune, Homebrew cleanup, Ollama models, installers, temp files, and dev waste.
 
+> **Platform note:** Xcode and Homebrew cleanup is macOS-only. Docker, ML models, pip/npm, temp files, and dev artifacts work cross-platform (macOS + Linux).
+
 ### Fast-Path Dispatcher (`antbot/agent/fast_path.py`)
 
 Simple read-only queries (like `ls`, `git status`, `docker ps`, `disk usage`) are intercepted before they reach the LLM. Pattern matching routes them directly to the right tool — instant response, zero tokens spent.
