@@ -296,7 +296,7 @@ _CATEGORY_KEYWORDS: dict[str, list[str]] = {
 }
 
 # Tools that are always included regardless of scoring
-_CORE_TOOLS = {"read_file", "exec"}
+_CORE_TOOLS = {"read_file", "write_file", "exec"}
 
 
 def select_tools_for_message(

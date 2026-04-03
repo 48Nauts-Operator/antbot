@@ -46,6 +46,10 @@ class ReadFileTool(Tool):
         return "read_file"
 
     @property
+    def category(self) -> str:
+        return "filesystem"
+
+    @property
     def description(self) -> str:
         return "Read the contents of a file at the given path."
 
@@ -94,6 +98,10 @@ class WriteFileTool(Tool):
         return "write_file"
 
     @property
+    def category(self) -> str:
+        return "filesystem"
+
+    @property
     def description(self) -> str:
         return "Write content to a file at the given path. Creates parent directories if needed."
 
@@ -130,6 +138,10 @@ class EditFileTool(Tool):
     @property
     def name(self) -> str:
         return "edit_file"
+
+    @property
+    def category(self) -> str:
+        return "filesystem"
 
     @property
     def description(self) -> str:
@@ -213,6 +225,10 @@ class ListDirTool(Tool):
     @property
     def name(self) -> str:
         return "list_dir"
+
+    @property
+    def category(self) -> str:
+        return "filesystem"
 
     @property
     def description(self) -> str:
@@ -312,6 +328,10 @@ class TreeTool(Tool):
     @property
     def name(self) -> str:
         return "tree"
+
+    @property
+    def category(self) -> str:
+        return "filesystem"
 
     @property
     def description(self) -> str:

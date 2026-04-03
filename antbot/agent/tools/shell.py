@@ -43,6 +43,10 @@ class ExecTool(Tool):
         return "exec"
 
     @property
+    def category(self) -> str:
+        return "shell"
+
+    @property
     def description(self) -> str:
         return "Execute a shell command and return its output. Use with caution."
 

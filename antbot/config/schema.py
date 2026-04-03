@@ -229,13 +229,13 @@ class AgentDefaults(Base):
     max_tokens: int = 4096  # Conservative for local models
     temperature: float = 0.3  # Slightly higher for local models
     max_tool_iterations: int = 20  # Reduced for local model reliability
-    memory_window: int = 50  # Smaller window for local context limits
+    memory_window: int = 20  # Keep small for local models — history is the biggest token cost
     model_context_window: int = 32000  # Model's context window in tokens
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
     guard_enabled: bool = True  # Enable Guard safety layer
     planner_enabled: bool = True  # Enable Planner for automatic task chunking
     tool_mode: str = "auto"  # "auto" | "native" | "react" — tool calling strategy
-    max_tools_per_request: int = 0  # 0 = send all tools, >0 = smart selection per message
+    max_tools_per_request: int = 8  # 0 = send all tools, >0 = smart selection per message
     fast_path_enabled: bool = True  # Bypass LLM for simple read-only commands (ls, git status, etc.)
 
 

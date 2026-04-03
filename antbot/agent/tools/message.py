@@ -41,6 +41,10 @@ class MessageTool(Tool):
         return "message"
 
     @property
+    def category(self) -> str:
+        return "communication"
+
+    @property
     def description(self) -> str:
         return "Send a message to the user. Use this when you want to communicate something."
 

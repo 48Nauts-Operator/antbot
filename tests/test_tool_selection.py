@@ -1,6 +1,6 @@
 """Tests for smart tool selection by message keywords."""
 
-from antbot.agent.tools.strategy import select_tools_for_message
+from antbot.agent.tools.strategy import select_tools_for_message, _CATEGORY_KEYWORDS
 
 
 def _make_tool_def(name: str) -> dict:
@@ -73,3 +73,70 @@ def test_filesystem_keywords_boost_filesystem_tools():
     names = _tool_names(result)
     assert "read_file" in names
     assert "write_file" in names
+
+
+def test_write_file_is_core_tool():
+    """write_file should always be included as a core tool."""
+    defs = _make_defs("read_file", "write_file", "exec", "docker", "git",
+                      "http_request", "process", "web_search", "web_fetch")
+    categories = {
+        "docker": "devops", "git": "devops", "http_request": "devops", "process": "devops",
+        "web_search": "web", "web_fetch": "web",
+        "read_file": "filesystem", "write_file": "filesystem",
+    }
+    result = select_tools_for_message("do something random", defs, categories, 4)
+    names = _tool_names(result)
+    assert "write_file" in names
+    assert "read_file" in names
+    assert "exec" in names
+
+
+# ---------------------------------------------------------------------------
+# Integration: real tool instances must have non-general categories
+# ---------------------------------------------------------------------------
+
+_VALID_CATEGORIES = set(_CATEGORY_KEYWORDS.keys())
+
+
+def _get_real_tool_categories() -> dict[str, str]:
+    """Instantiate real tool classes and collect their categories."""
+    from antbot.agent.tools.filesystem import (
+        ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, TreeTool,
+    )
+    from antbot.agent.tools.shell import ExecTool
+    from antbot.agent.tools.web import WebSearchTool, WebFetchTool
+
+    tools = [
+        ReadFileTool(), WriteFileTool(), EditFileTool(), ListDirTool(), TreeTool(),
+        ExecTool(),
+        WebSearchTool(), WebFetchTool(),
+    ]
+    return {t.name: t.category for t in tools}
+
+
+def test_all_tools_have_valid_categories():
+    """Every built-in tool should have a category from _CATEGORY_KEYWORDS, not 'general'."""
+    categories = _get_real_tool_categories()
+    for name, cat in categories.items():
+        assert cat != "general", f"{name} still has category='general' — add a category override"
+        assert cat in _VALID_CATEGORIES, f"{name} has unknown category '{cat}'"
+
+
+def test_filesystem_tools_category():
+    """All filesystem tools report category='filesystem'."""
+    from antbot.agent.tools.filesystem import (
+        ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, TreeTool,
+    )
+    for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, TreeTool):
+        assert cls().category == "filesystem"
+
+
+def test_shell_tool_category():
+    from antbot.agent.tools.shell import ExecTool
+    assert ExecTool().category == "shell"
+
+
+def test_web_tools_category():
+    from antbot.agent.tools.web import WebSearchTool, WebFetchTool
+    assert WebSearchTool().category == "web"
+    assert WebFetchTool().category == "web"

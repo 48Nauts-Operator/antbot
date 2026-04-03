@@ -35,6 +35,10 @@ class CronTool(Tool):
         return "cron"
 
     @property
+    def category(self) -> str:
+        return "scheduling"
+
+    @property
     def description(self) -> str:
         return "Schedule reminders and recurring tasks. Actions: add, list, remove."
 

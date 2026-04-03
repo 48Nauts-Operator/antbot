@@ -33,7 +33,7 @@ class ContextBuilder:
             parts.append(bootstrap)
 
         memory = self.memory.get_memory_context()
-        if memory:
+        if memory and not self._is_unfilled_template(memory):
             parts.append(f"# Memory\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
@@ -67,17 +67,14 @@ You are antbot, a helpful AI assistant.
 {runtime}
 
 ## Workspace
-Your workspace is at: {workspace_path}
-- Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
-- Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
+{workspace_path}
+- Memory: memory/MEMORY.md | History: memory/HISTORY.md | Skills: skills/*/SKILL.md
 
-## antbot Guidelines
-- State intent before tool calls, but NEVER predict or claim results before receiving them.
-- Before modifying a file, read it first. Do not assume files or directories exist.
-- After writing or editing a file, re-read it if accuracy matters.
-- If a tool call fails, analyze the error before retrying with a different approach.
-- Ask for clarification when the request is ambiguous.
+## Guidelines
+- State intent before tool calls; never predict results before receiving them.
+- Read before modifying; don't assume files exist.
+- On tool failure, analyze the error before retrying differently.
+- Ask for clarification when ambiguous.
 
 Reply directly with text for conversations. Only use the 'message' tool to send to a specific chat channel."""
 
@@ -91,6 +88,16 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
+    @staticmethod
+    def _is_unfilled_template(content: str) -> bool:
+        """Check if content is still an unfilled template (not worth sending to LLM)."""
+        markers = [
+            "(your name)", "(your timezone", "(your role",
+            "Edit this file", "(Important facts about the user)",
+            "(Things to remember)",
+        ]
+        return any(m in content for m in markers)
+
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
         parts = []
@@ -99,6 +106,8 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
+                if self._is_unfilled_template(content):
+                    continue
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
