@@ -51,6 +51,7 @@ func main() {
 	pb.RegisterContentExtractServer(grpcServer, svc)
 	pb.RegisterQueueServer(grpcServer, svc)
 	pb.RegisterSystemServer(grpcServer, svc)
+	pb.RegisterGitServer(grpcServer, svc)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

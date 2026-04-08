@@ -1127,6 +1127,95 @@ def backup_cmd(
 
 
 # ============================================================================
+# Project Protection
+# ============================================================================
+
+@app.command("projects")
+def projects_cmd(
+    root: str = typer.Option("~/DevHub_stark/factory", help="Root directory to scan"),
+):
+    """Show project status across all repos in factory."""
+    import asyncio
+    from pathlib import Path
+    from antbot.exec_bridge.manager import ExecBridgeManager
+    from antbot.events.logger import EventLogger
+    from antbot.scout.projects import ProjectManager
+
+    config = _load_config()
+    event_logger = EventLogger(Path(config.events.log_dir).expanduser())
+    exec_manager = ExecBridgeManager(
+        socket_path=config.exec_bridge.socket_path,
+        binary_path=config.exec_bridge.binary_path,
+        auto_start=config.exec_bridge.auto_start,
+    )
+
+    async def run():
+        await exec_manager.start()
+        try:
+            pm = ProjectManager(exec_manager, event_logger, config.nas.files_root)
+            report = await pm.project_status(root)
+            console.print(report)
+        finally:
+            await exec_manager.stop()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+@app.command("project-protect")
+def project_protect_cmd(
+    root: str = typer.Option("~/DevHub_stark/factory", help="Root directory to scan"),
+    dry_run: bool = typer.Option(True, help="Preview mode"),
+):
+    """Create git bundles for all projects."""
+    import asyncio
+    from pathlib import Path
+    from antbot.exec_bridge.manager import ExecBridgeManager
+    from antbot.events.logger import EventLogger
+    from antbot.scout.projects import ProjectManager
+
+    config = _load_config()
+    event_logger = EventLogger(Path(config.events.log_dir).expanduser())
+    exec_manager = ExecBridgeManager(
+        socket_path=config.exec_bridge.socket_path,
+        binary_path=config.exec_bridge.binary_path,
+        auto_start=config.exec_bridge.auto_start,
+    )
+
+    mode = "[yellow](DRY RUN)[/yellow]" if dry_run else "[green](LIVE)[/green]"
+    console.print(f"[bold]Project Protection[/bold] {mode}")
+
+    async def run():
+        await exec_manager.start()
+        try:
+            pm = ProjectManager(
+                exec_manager, event_logger, config.nas.files_root, dry_run=dry_run,
+            )
+            results = await pm.protect_all(root)
+            for r in results["projects"]:
+                name = r["name"]
+                if r.get("skipped"):
+                    console.print(f"  [dim]⊘ {name}: {r['reason']}[/dim]")
+                elif r.get("bundle", {}).get("ok"):
+                    dirty = f" [yellow]({r['dirty']} dirty)[/yellow]" if r.get("dirty") else ""
+                    console.print(f"  [green]✓[/green] {name}: bundled{dirty}")
+                else:
+                    error = r.get("bundle", {}).get("error", "unknown")
+                    console.print(f"  [red]✗[/red] {name}: {error}")
+
+            console.print(f"\n  [dim]{results['total']} projects scanned[/dim]")
+        finally:
+            await exec_manager.stop()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+# ============================================================================
 # Provisioning
 # ============================================================================
 

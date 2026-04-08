@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"os"
+	"strings"
 	"time"
 
 	pb "github.com/48Nauts-Operator/antbot-exec/api/gen"
+	"github.com/48Nauts-Operator/antbot-exec/internal/git"
 	"github.com/48Nauts-Operator/antbot-exec/internal/health"
 	"github.com/48Nauts-Operator/antbot-exec/internal/manifest"
 	"github.com/48Nauts-Operator/antbot-exec/internal/mover"
@@ -22,6 +25,7 @@ type Server struct {
 	pb.UnimplementedContentExtractServer
 	pb.UnimplementedQueueServer
 	pb.UnimplementedSystemServer
+	pb.UnimplementedGitServer
 
 	startTime time.Time
 	version   string
@@ -173,6 +177,79 @@ func (s *Server) Stats(_ context.Context, _ *pb.QueueStatsRequest) (*pb.QueueSta
 		TotalSeen: s.queue.TotalSeen(),
 		OldestMs:  s.queue.OldestMs(),
 	}, nil
+}
+
+// ─── Git ──────────────────────────────────────────────
+
+func (s *Server) Status(_ context.Context, req *pb.GitStatusRequest) (*pb.GitStatusResponse, error) {
+	expanded := expandPath(req.RepoPath)
+	st, err := git.Status(expanded)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.GitStatusResponse{
+		Path:           st.Path,
+		Name:           st.Name,
+		Branch:         st.Branch,
+		Remote:         st.Remote,
+		DirtyFiles:     int32(st.DirtyFiles),
+		UntrackedFiles: int32(st.UntrackedFiles),
+		AheadBy:        int32(st.AheadBy),
+		LastCommit:     st.LastCommit.Format(time.RFC3339),
+		LastMessage:    st.LastMessage,
+		HasGit:         st.HasGit,
+	}, nil
+}
+
+func (s *Server) Bundle(_ context.Context, req *pb.GitBundleRequest) (*pb.GitBundleResponse, error) {
+	expanded := expandPath(req.RepoPath)
+	outPath := expandPath(req.OutputPath)
+	if err := git.Bundle(expanded, outPath); err != nil {
+		return &pb.GitBundleResponse{Ok: false, Error: err.Error()}, nil
+	}
+	return &pb.GitBundleResponse{Ok: true, OutputPath: outPath}, nil
+}
+
+func (s *Server) ScanProjects(_ context.Context, req *pb.ScanProjectsRequest) (*pb.ScanProjectsResponse, error) {
+	root := expandPath(req.RootPath)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+
+	var projects []*pb.GitStatusResponse
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		projectPath := root + "/" + entry.Name()
+		st, err := git.Status(projectPath)
+		if err != nil {
+			continue
+		}
+		projects = append(projects, &pb.GitStatusResponse{
+			Path:           st.Path,
+			Name:           st.Name,
+			Branch:         st.Branch,
+			Remote:         st.Remote,
+			DirtyFiles:     int32(st.DirtyFiles),
+			UntrackedFiles: int32(st.UntrackedFiles),
+			AheadBy:        int32(st.AheadBy),
+			LastCommit:     st.LastCommit.Format(time.RFC3339),
+			LastMessage:    st.LastMessage,
+			HasGit:         st.HasGit,
+		})
+	}
+
+	return &pb.ScanProjectsResponse{Projects: projects}, nil
+}
+
+func expandPath(p string) string {
+	if strings.HasPrefix(p, "~/") {
+		home, _ := os.UserHomeDir()
+		return home + p[1:]
+	}
+	return p
 }
 
 // ─── System ───────────────────────────────────────────
