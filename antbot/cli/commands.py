@@ -1127,6 +1127,76 @@ def backup_cmd(
 
 
 # ============================================================================
+# Provisioning
+# ============================================================================
+
+@app.command("provision")
+def provision_cmd(
+    dry_run: bool = typer.Option(True, help="Preview mode — generate but don't run playbook"),
+    tags: str | None = typer.Option(None, help="Ansible tags to run (comma-separated)"),
+    from_profile: str | None = typer.Option(None, "--from", help="Use another machine's profile"),
+):
+    """Generate or run Ansible playbook from machine manifest."""
+    import asyncio
+    from pathlib import Path
+    from antbot.exec_bridge.manager import ExecBridgeManager
+    from antbot.events.logger import EventLogger
+    from antbot.scout.provision import save_playbook, run_playbook, generate_playbook
+
+    config = _load_config()
+    backup_root = config.nas.backup_root
+
+    event_logger = EventLogger(Path(config.events.log_dir).expanduser())
+    exec_manager = ExecBridgeManager(
+        socket_path=config.exec_bridge.socket_path,
+        binary_path=config.exec_bridge.binary_path,
+        auto_start=config.exec_bridge.auto_start,
+    )
+
+    mode = "[yellow](DRY RUN)[/yellow]" if dry_run else "[green](LIVE)[/green]"
+    console.print(f"[bold]AntBot Provision[/bold] {mode}")
+
+    async def run():
+        await exec_manager.start()
+        try:
+            client = await exec_manager.ensure_connected()
+            # Get manifest
+            result = await client.manifest()
+            if not result["ok"]:
+                console.print(f"  [red]Failed to collect manifest: {result['error']}[/red]")
+                return
+
+            manifest_json = result["json"]
+
+            # Generate playbook
+            pb_result = save_playbook(manifest_json, backup_root, dry_run=dry_run)
+            console.print(f"  Playbook: {pb_result['path']} ({pb_result['lines']} lines)")
+
+            if dry_run:
+                console.print("  [yellow]Dry-run: playbook generated but not executed[/yellow]")
+                # Show a preview
+                content = generate_playbook(manifest_json, backup_root)
+                preview = "\n".join(content.split("\n")[:30])
+                console.print(f"\n[dim]{preview}\n  ...[/dim]")
+            else:
+                # Run the playbook
+                tag_list = tags.split(",") if tags else None
+                console.print("  Running playbook...")
+                result = run_playbook(pb_result["path"], tags=tag_list)
+                if result["ok"]:
+                    console.print("  [green]Playbook completed successfully[/green]")
+                else:
+                    console.print(f"  [red]Playbook failed: {result.get('error', result.get('stderr', ''))}[/red]")
+        finally:
+            await exec_manager.stop()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+
+# ============================================================================
 # Scout Status & Events
 # ============================================================================
 
