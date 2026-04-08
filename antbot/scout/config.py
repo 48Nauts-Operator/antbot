@@ -74,6 +74,45 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "confirm": True,
         "tags": ["triage", "quarantine"],
     },
+    # === Desktop triage (Phase 2) ===
+    {
+        "name": "screenshots-from-desktop",
+        "watch": "~/Desktop",
+        "match": {
+            "patterns": ["Screenshot*", "Bildschirmfoto*", "Screen Shot*"],
+            "type": "file",
+        },
+        "target": "/Volumes/devhub/Photos/Screenshots/{year}/{month}/",
+        "action": "move",
+        "delay": "10s",
+        "tags": ["triage", "screenshots"],
+    },
+    {
+        "name": "photos-from-desktop",
+        "watch": "~/Desktop",
+        "match": {
+            "extensions": ["jpg", "jpeg", "png", "heic", "webp", "gif", "svg"],
+            "type": "file",
+        },
+        "target": "/Volumes/devhub/Photos/{year}/{month}/",
+        "action": "move",
+        "delay": "30s",
+        "priority": 40,
+        "tags": ["triage", "photos"],
+    },
+    {
+        "name": "documents-from-desktop",
+        "watch": "~/Desktop",
+        "match": {
+            "extensions": ["pdf", "docx", "xlsx", "pptx", "txt", "md", "rtf", "csv"],
+            "type": "file",
+        },
+        "target": "/Volumes/devhub/Documents/Unsorted/{year}/",
+        "action": "move",
+        "delay": "30s",
+        "priority": 40,
+        "tags": ["triage", "documents"],
+    },
 ]
 
 

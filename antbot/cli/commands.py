@@ -1051,6 +1051,63 @@ def rules_init():
 # Scout (file watcher daemon)
 # ============================================================================
 
+@app.command("scout-status")
+def scout_status_cmd():
+    """Show scout daemon state: tracked files, queued, failed."""
+    from antbot.scout.state import StateTracker
+
+    tracker = StateTracker(os.path.expanduser("~/.antbot/state.json"))
+    summary = tracker.summary()
+
+    if not summary:
+        console.print("  [dim]No tracked files.[/dim]")
+        return
+
+    for state, count in sorted(summary.items()):
+        color = {"succeeded": "green", "failed": "red", "queued": "yellow",
+                 "executing": "cyan"}.get(state, "dim")
+        console.print(f"  [{color}]{state}[/{color}]: {count}")
+
+    queued = tracker.get_queued()
+    if queued:
+        console.print(f"\n  [yellow]Queued for retry ({len(queued)}):[/yellow]")
+        for tf in queued[:10]:
+            console.print(f"    {tf.path} [dim]→ {tf.target}[/dim] (attempt {tf.attempts})")
+
+    failed = tracker.get_failed()
+    if failed:
+        console.print(f"\n  [red]Failed ({len(failed)}):[/red]")
+        for tf in failed[:10]:
+            console.print(f"    {tf.path} [dim]{tf.error}[/dim]")
+
+
+@app.command("scout-events")
+def scout_events_cmd(
+    tail: int = typer.Option(20, help="Number of recent events"),
+    event_type: str | None = typer.Option(None, "--type", help="Filter by event type"),
+):
+    """Show recent scout events from JSONL log."""
+    from pathlib import Path
+    from antbot.events.logger import EventLogger
+
+    config = _load_config()
+    logger = EventLogger(Path(config.events.log_dir).expanduser())
+    events = logger.query(event_type=event_type, limit=tail)
+
+    if not events:
+        console.print("  [dim]No events found.[/dim]")
+        return
+
+    for evt in reversed(events):  # chronological order
+        ts = evt.get("ts", "")[:19]
+        etype = evt.get("event", "")
+        src = os.path.basename(evt.get("src", ""))
+        ok = evt.get("ok", True)
+        dry = " [dim](dry)[/dim]" if evt.get("dry_run") else ""
+        color = "green" if ok else "red"
+        console.print(f"  [{color}]{ts}[/{color}]  {etype:20s}  {src}{dry}")
+
+
 @app.command("scout")
 def scout_cmd(
     dry_run: bool = typer.Option(True, help="Preview mode — log but don't move files"),
