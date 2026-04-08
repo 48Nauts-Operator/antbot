@@ -145,3 +145,26 @@ message QueueStatsResponse {
   int32 total_seen = 2;
   int64 oldest_ms = 3;
 }
+
+// ─── System ───────────────────────────────────────────
+service System {
+  rpc Manifest(ManifestRequest) returns (ManifestResponse);
+  rpc CheckMount(CheckMountRequest) returns (CheckMountResponse);
+}
+
+message ManifestRequest {}
+
+message ManifestResponse {
+  bool ok = 1;
+  string error = 2;
+  string json = 3;  // full manifest as JSON string
+}
+
+message CheckMountRequest {
+  string path = 1;
+}
+
+message CheckMountResponse {
+  bool mounted = 1;
+  uint64 free_bytes = 2;
+}

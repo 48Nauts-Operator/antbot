@@ -115,3 +115,17 @@ class ExecBridgeClient:
         stub = antbot_pb2_grpc.ContentExtractStub(self._ensure_channel())
         resp = await stub.ProbeMime(antbot_pb2.ProbeMimeRequest(path=path))
         return {"mime_type": resp.mime_type, "size_bytes": resp.size_bytes}
+
+    # ─── System ───────────────────────────────────────
+
+    async def manifest(self) -> dict:
+        """Collect machine manifest."""
+        stub = antbot_pb2_grpc.SystemStub(self._ensure_channel())
+        resp = await stub.Manifest(antbot_pb2.ManifestRequest())
+        return {"ok": resp.ok, "error": resp.error, "json": resp.json}
+
+    async def check_mount(self, path: str) -> dict:
+        """Check if a path is mounted and get free space."""
+        stub = antbot_pb2_grpc.SystemStub(self._ensure_channel())
+        resp = await stub.CheckMount(antbot_pb2.CheckMountRequest(path=path))
+        return {"mounted": resp.mounted, "free_bytes": resp.free_bytes}

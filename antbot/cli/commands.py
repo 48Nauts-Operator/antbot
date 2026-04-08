@@ -1051,6 +1051,85 @@ def rules_init():
 # Scout (file watcher daemon)
 # ============================================================================
 
+# ============================================================================
+# Backup
+# ============================================================================
+
+@app.command("backup")
+def backup_cmd(
+    dry_run: bool = typer.Option(True, help="Preview mode — log but don't copy files"),
+    dotfiles: bool = typer.Option(True, help="Back up dotfiles"),
+    ssh: bool = typer.Option(True, help="Back up SSH config + public keys"),
+    configs: bool = typer.Option(True, help="Back up VS Code + Claude configs"),
+    manifest: bool = typer.Option(True, help="Generate machine manifest"),
+):
+    """One-way backup of machine state to NAS."""
+    import asyncio
+    from pathlib import Path
+    from antbot.exec_bridge.manager import ExecBridgeManager
+    from antbot.events.logger import EventLogger
+    from antbot.scout.backup import BackupManager
+
+    config = _load_config()
+
+    event_logger = EventLogger(
+        Path(config.events.log_dir).expanduser(),
+        config.events.max_file_size_mb,
+    )
+    exec_manager = ExecBridgeManager(
+        socket_path=config.exec_bridge.socket_path,
+        binary_path=config.exec_bridge.binary_path,
+        auto_start=config.exec_bridge.auto_start,
+    )
+
+    backup = BackupManager(
+        exec_manager=exec_manager,
+        event_logger=event_logger,
+        backup_root=config.nas.backup_root,
+        dry_run=dry_run or config.rules.dry_run,
+    )
+
+    mode = "[yellow](DRY RUN)[/yellow]" if dry_run else "[green](LIVE)[/green]"
+    console.print(f"[bold]AntBot Backup[/bold] {mode}")
+    console.print(f"  Target: {config.nas.backup_root}")
+
+    async def run():
+        await exec_manager.start()
+        try:
+            if dotfiles:
+                results = await backup.backup_dotfiles()
+                ok = sum(1 for r in results if r.get("ok"))
+                console.print(f"  Dotfiles: {ok}/{len(results)} backed up")
+
+            if ssh:
+                results = await backup.backup_ssh_config()
+                ok = sum(1 for r in results if r.get("ok"))
+                console.print(f"  SSH config: {ok}/{len(results)} backed up")
+
+            if configs:
+                results = await backup.backup_configs()
+                ok = sum(1 for r in results if r.get("ok"))
+                console.print(f"  Configs: {ok}/{len(results)} backed up")
+
+            if manifest:
+                result = await backup.generate_manifest()
+                status = "[green]✓[/green]" if result.get("ok") else "[red]✗[/red]"
+                console.print(f"  Manifest: {status}")
+        finally:
+            await exec_manager.stop()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+
+    console.print("  [dim]Done.[/dim]")
+
+
+# ============================================================================
+# Scout Status & Events
+# ============================================================================
+
 @app.command("scout-status")
 def scout_status_cmd():
     """Show scout daemon state: tracked files, queued, failed."""

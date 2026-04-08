@@ -6,6 +6,7 @@ import (
 
 	pb "github.com/48Nauts-Operator/antbot-exec/api/gen"
 	"github.com/48Nauts-Operator/antbot-exec/internal/health"
+	"github.com/48Nauts-Operator/antbot-exec/internal/manifest"
 	"github.com/48Nauts-Operator/antbot-exec/internal/mover"
 	"github.com/48Nauts-Operator/antbot-exec/internal/queue"
 	"github.com/48Nauts-Operator/antbot-exec/internal/watcher"
@@ -20,6 +21,7 @@ type Server struct {
 	pb.UnimplementedFileMoverServer
 	pb.UnimplementedContentExtractServer
 	pb.UnimplementedQueueServer
+	pb.UnimplementedSystemServer
 
 	startTime time.Time
 	version   string
@@ -173,9 +175,22 @@ func (s *Server) Stats(_ context.Context, _ *pb.QueueStatsRequest) (*pb.QueueSta
 	}, nil
 }
 
-// ─── Utility ──────────────────────────────────────────
+// ─── System ───────────────────────────────────────────
 
-// CheckNAS verifies a mount path is accessible.
-func CheckNAS(path string) bool {
-	return health.CheckMount(path)
+func (s *Server) Manifest(_ context.Context, _ *pb.ManifestRequest) (*pb.ManifestResponse, error) {
+	m, err := manifest.Collect()
+	if err != nil {
+		return &pb.ManifestResponse{Ok: false, Error: err.Error()}, nil
+	}
+	data, err := m.ToJSON()
+	if err != nil {
+		return &pb.ManifestResponse{Ok: false, Error: err.Error()}, nil
+	}
+	return &pb.ManifestResponse{Ok: true, Json: string(data)}, nil
+}
+
+func (s *Server) CheckMount(_ context.Context, req *pb.CheckMountRequest) (*pb.CheckMountResponse, error) {
+	mounted := health.CheckMount(req.Path)
+	freeBytes := health.DiskFreeBytes(req.Path)
+	return &pb.CheckMountResponse{Mounted: mounted, FreeBytes: freeBytes}, nil
 }
