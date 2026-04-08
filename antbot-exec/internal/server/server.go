@@ -5,12 +5,15 @@ import (
 	"time"
 
 	pb "github.com/48Nauts-Operator/antbot-exec/api/gen"
+	"github.com/48Nauts-Operator/antbot-exec/internal/health"
+	"github.com/48Nauts-Operator/antbot-exec/internal/mover"
+	"github.com/48Nauts-Operator/antbot-exec/internal/queue"
+	"github.com/48Nauts-Operator/antbot-exec/internal/watcher"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // Server implements all antbot-exec gRPC services.
-// Phase 0: only Health is functional; everything else returns Unimplemented.
 type Server struct {
 	pb.UnimplementedHealthServer
 	pb.UnimplementedWatcherServer
@@ -20,13 +23,19 @@ type Server struct {
 
 	startTime time.Time
 	version   string
+	queue     *queue.Queue
+	watcher   *watcher.Watcher
 }
 
-func New(startTime time.Time, version string) *Server {
-	return &Server{startTime: startTime, version: version}
+func New(startTime time.Time, version string, queuePath string) *Server {
+	return &Server{
+		startTime: startTime,
+		version:   version,
+		queue:     queue.New(queuePath),
+	}
 }
 
-// ─── Health (implemented) ─────────────────────────────
+// ─── Health ───────────────────────────────────────────
 
 func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, error) {
 	return &pb.PingResponse{
@@ -36,24 +45,103 @@ func (s *Server) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, e
 	}, nil
 }
 
-// ─── Watcher (Phase 1) ───────────────────────────────
+// ─── Watcher ──────────────────────────────────────────
 
-func (s *Server) Watch(_ *pb.WatchRequest, _ pb.Watcher_WatchServer) error {
-	return status.Error(codes.Unimplemented, "Watch not implemented — Phase 1")
+func (s *Server) Watch(req *pb.WatchRequest, stream pb.Watcher_WatchServer) error {
+	w, err := watcher.New(5 * time.Second) // 5s debounce for download stability
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to create watcher: %v", err)
+	}
+	s.watcher = w
+	defer w.Stop()
+
+	eventCh := make(chan *pb.FSEvent, 100)
+	if err := w.Watch(req.Paths, req.IgnorePatterns, req.Recursive, eventCh); err != nil {
+		return status.Errorf(codes.Internal, "failed to start watching: %v", err)
+	}
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case evt, ok := <-eventCh:
+			if !ok {
+				return nil
+			}
+			if err := stream.Send(evt); err != nil {
+				// Python disconnected — buffer events
+				s.queue.Push(evt)
+				return err
+			}
+		}
+	}
 }
 
 func (s *Server) StopWatch(_ context.Context, _ *pb.StopWatchRequest) (*pb.StopWatchResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "StopWatch not implemented — Phase 1")
+	if s.watcher != nil {
+		s.watcher.Stop()
+		s.watcher = nil
+	}
+	return &pb.StopWatchResponse{Ok: true}, nil
 }
 
-// ─── FileMover (Phase 1) ─────────────────────────────
+// ─── FileMover ────────────────────────────────────────
 
-func (s *Server) Move(_ context.Context, _ *pb.MoveRequest) (*pb.MoveResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "Move not implemented — Phase 1")
+func (s *Server) Move(_ context.Context, req *pb.MoveRequest) (*pb.MoveResponse, error) {
+	// v1 invariant: never overwrite
+	if req.Overwrite {
+		return &pb.MoveResponse{
+			Ok:    false,
+			Error: "overwrite=true is not allowed in v1",
+		}, nil
+	}
+
+	size, checksum, err := mover.Move(req.Src, req.Dst, false, req.DryRun)
+	if err != nil {
+		return &pb.MoveResponse{
+			Ok:    false,
+			Error: err.Error(),
+			Src:   req.Src,
+			Dst:   req.Dst,
+		}, nil
+	}
+
+	return &pb.MoveResponse{
+		Ok:        true,
+		Src:       req.Src,
+		Dst:       req.Dst,
+		SizeBytes: size,
+		Checksum:  checksum,
+		WasDryRun: req.DryRun,
+	}, nil
 }
 
-func (s *Server) Copy(_ context.Context, _ *pb.CopyRequest) (*pb.CopyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "Copy not implemented — Phase 1")
+func (s *Server) Copy(_ context.Context, req *pb.CopyRequest) (*pb.CopyResponse, error) {
+	if req.Overwrite {
+		return &pb.CopyResponse{
+			Ok:    false,
+			Error: "overwrite=true is not allowed in v1",
+		}, nil
+	}
+
+	size, checksum, err := mover.Copy(req.Src, req.Dst, false, req.DryRun)
+	if err != nil {
+		return &pb.CopyResponse{
+			Ok:    false,
+			Error: err.Error(),
+			Src:   req.Src,
+			Dst:   req.Dst,
+		}, nil
+	}
+
+	return &pb.CopyResponse{
+		Ok:        true,
+		Src:       req.Src,
+		Dst:       req.Dst,
+		SizeBytes: size,
+		Checksum:  checksum,
+		WasDryRun: req.DryRun,
+	}, nil
 }
 
 // ─── ContentExtract (Phase 2+) ───────────────────────
@@ -70,12 +158,24 @@ func (s *Server) ProbeMime(_ context.Context, _ *pb.ProbeMimeRequest) (*pb.Probe
 	return nil, status.Error(codes.Unimplemented, "ProbeMime not implemented — Phase 2")
 }
 
-// ─── Queue (Phase 1) ─────────────────────────────────
+// ─── Queue ────────────────────────────────────────────
 
-func (s *Server) Drain(_ context.Context, _ *pb.DrainRequest) (*pb.DrainResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "Drain not implemented — Phase 1")
+func (s *Server) Drain(_ context.Context, req *pb.DrainRequest) (*pb.DrainResponse, error) {
+	events := s.queue.Drain(req.MaxEvents)
+	return &pb.DrainResponse{Events: events}, nil
 }
 
 func (s *Server) Stats(_ context.Context, _ *pb.QueueStatsRequest) (*pb.QueueStatsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "Stats not implemented — Phase 1")
+	return &pb.QueueStatsResponse{
+		Buffered:  s.queue.Len(),
+		TotalSeen: s.queue.TotalSeen(),
+		OldestMs:  s.queue.OldestMs(),
+	}, nil
+}
+
+// ─── Utility ──────────────────────────────────────────
+
+// CheckNAS verifies a mount path is accessible.
+func CheckNAS(path string) bool {
+	return health.CheckMount(path)
 }

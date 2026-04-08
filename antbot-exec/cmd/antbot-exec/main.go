@@ -19,7 +19,13 @@ var version = "0.1.0"
 
 func main() {
 	socketPath := flag.String("socket", "/tmp/antbot.sock", "Unix socket path for gRPC server")
+	queuePath := flag.String("queue", "", "Path for event queue file (default: ~/.antbot/queue.jsonl)")
 	flag.Parse()
+
+	if *queuePath == "" {
+		home, _ := os.UserHomeDir()
+		*queuePath = home + "/.antbot/queue.jsonl"
+	}
 
 	// Remove stale socket if present
 	if _, err := os.Stat(*socketPath); err == nil {
@@ -38,7 +44,7 @@ func main() {
 	grpcServer := grpc.NewServer()
 
 	// Register services
-	svc := server.New(startTime, version)
+	svc := server.New(startTime, version, *queuePath)
 	pb.RegisterHealthServer(grpcServer, svc)
 	pb.RegisterWatcherServer(grpcServer, svc)
 	pb.RegisterFileMoverServer(grpcServer, svc)

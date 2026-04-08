@@ -979,5 +979,137 @@ def _login_github_copilot() -> None:
         raise typer.Exit(1)
 
 
+# ============================================================================
+# Rules Management
+# ============================================================================
+
+rules_app = typer.Typer(help="Manage file triage rules")
+app.add_typer(rules_app, name="rules")
+
+
+@rules_app.command("list")
+def rules_list(
+    tag: str | None = typer.Option(None, help="Filter by tag"),
+):
+    """Show all configured rules."""
+    from antbot.scout.config import RulesLoader
+
+    loader = RulesLoader()
+    engine = loader.engine
+
+    for rule in engine.rules:
+        if tag and tag not in rule.tags:
+            continue
+        status = "[green]●[/green]" if rule.enabled else "[dim]○[/dim]"
+        confirm = " [yellow]⚠ confirm[/yellow]" if rule.confirm else ""
+        console.print(
+            f"  {status} [bold]{rule.name}[/bold]  "
+            f"[dim]{rule.action}[/dim] → {rule.target}{confirm}"
+        )
+        if rule.extensions:
+            console.print(f"      extensions: {', '.join(rule.extensions)}")
+        if rule.patterns:
+            console.print(f"      patterns: {', '.join(rule.patterns)}")
+
+    console.print(f"\n  [dim]{len(engine.rules)} rules total[/dim]")
+
+
+@rules_app.command("test")
+def rules_test(
+    path: str = typer.Argument(..., help="File path to test against rules"),
+):
+    """Dry-run: show which rules would match a file."""
+    from antbot.scout.config import RulesLoader
+
+    loader = RulesLoader()
+    results = loader.engine.test(path)
+
+    if not results:
+        console.print(f"  [dim]No rules match: {path}[/dim]")
+        return
+
+    for r in results:
+        console.print(
+            f"  [green]✓[/green] [bold]{r['rule']}[/bold]  "
+            f"{r['action']} → {r['target']}"
+        )
+        if r["confirm"]:
+            console.print("      [yellow]⚠ requires confirmation[/yellow]")
+
+
+@rules_app.command("init")
+def rules_init():
+    """Create default rules file at ~/.antbot/rules.yml."""
+    from antbot.scout.config import RulesLoader
+
+    loader = RulesLoader()
+    loader.save_defaults()
+    console.print("[green]✓[/green] Default rules written to ~/.antbot/rules.yml")
+
+
+# ============================================================================
+# Scout (file watcher daemon)
+# ============================================================================
+
+@app.command("scout")
+def scout_cmd(
+    dry_run: bool = typer.Option(True, help="Preview mode — log but don't move files"),
+):
+    """Start the file triage scout daemon."""
+    import asyncio
+    from pathlib import Path
+    from antbot.exec_bridge.manager import ExecBridgeManager
+    from antbot.events.logger import EventLogger
+    from antbot.scout.config import RulesLoader
+    from antbot.scout.daemon import ScoutDaemon
+
+    config = _load_config()
+
+    event_logger = EventLogger(
+        Path(config.events.log_dir).expanduser(),
+        config.events.max_file_size_mb,
+    )
+    exec_manager = ExecBridgeManager(
+        socket_path=config.exec_bridge.socket_path,
+        binary_path=config.exec_bridge.binary_path,
+        auto_start=config.exec_bridge.auto_start,
+    )
+    rules_loader = RulesLoader(config.rules.rules_path)
+    use_dry_run = dry_run or config.rules.dry_run
+
+    scout = ScoutDaemon(
+        exec_manager=exec_manager,
+        rules_loader=rules_loader,
+        event_logger=event_logger,
+        dry_run=use_dry_run,
+    )
+
+    console.print(f"[bold]AntBot Scout[/bold] {'[yellow](DRY RUN)[/yellow]' if use_dry_run else '[green](LIVE)[/green]'}")
+    console.print(f"  Rules: {rules_loader._path}")
+    console.print(f"  Events: {event_logger._log_dir}")
+
+    async def run():
+        await exec_manager.start()
+        try:
+            await scout.start()
+        finally:
+            await exec_manager.stop()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        console.print("\n[dim]Scout stopped.[/dim]")
+
+
+def _load_config():
+    """Load config for standalone commands."""
+    from antbot.config.loader import load_config
+    try:
+        return load_config()
+    except Exception:
+        from antbot.config.schema import Config
+        return Config()
+
+
 if __name__ == "__main__":
     app()
