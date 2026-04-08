@@ -327,6 +327,42 @@ class MCPServerConfig(Base):
     tool_timeout: int = 30  # seconds before a tool call is cancelled
 
 
+class NasConfig(Base):
+    """NAS mount points for file management."""
+
+    enabled: bool = False
+    files_root: str = "/Volumes/devhub"
+    backup_root: str = "/Volumes/Tron/mpb_backup"
+    verify_mounts_on_start: bool = True
+
+
+class RulesConfig(Base):
+    """File routing rules configuration."""
+
+    rules_path: str = "~/.antbot/rules.yml"
+    default_action: str = "log"  # "log" | "ask" — what to do when no rule matches
+    dry_run: bool = True  # global dry-run override (safe default)
+
+
+class EventConfig(Base):
+    """Event logging configuration."""
+
+    log_dir: str = "~/.antbot/events"
+    max_file_size_mb: int = 50
+    retention_days: int = 90
+
+
+class ExecBridgeConfig(Base):
+    """Go exec bridge configuration."""
+
+    enabled: bool = False
+    socket_path: str = "/tmp/antbot.sock"
+    binary_path: str = "~/.antbot/bin/antbot-exec"
+    auto_start: bool = True
+    connect_timeout_s: int = 5
+    health_check_interval_s: int = 30
+
+
 class ToolsConfig(Base):
     """Tools configuration."""
 
@@ -344,6 +380,10 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    nas: NasConfig = Field(default_factory=NasConfig)
+    rules: RulesConfig = Field(default_factory=RulesConfig)
+    events: EventConfig = Field(default_factory=EventConfig)
+    exec_bridge: ExecBridgeConfig = Field(default_factory=ExecBridgeConfig)
 
     @property
     def workspace_path(self) -> Path:

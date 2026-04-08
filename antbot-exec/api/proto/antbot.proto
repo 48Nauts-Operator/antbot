@@ -1,0 +1,147 @@
+syntax = "proto3";
+package antbot;
+option go_package = "github.com/48Nauts-Operator/antbot-exec/api/gen";
+
+// ─── Health ───────────────────────────────────────────
+service Health {
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+message PingResponse {
+  bool ok = 1;
+  double uptime_s = 2;
+  string version = 3;
+}
+
+// ─── Watcher ──────────────────────────────────────────
+service Watcher {
+  rpc Watch(WatchRequest) returns (stream FSEvent);
+  rpc StopWatch(StopWatchRequest) returns (StopWatchResponse);
+}
+
+message WatchRequest {
+  repeated string paths = 1;
+  repeated string ignore_patterns = 2;
+  bool recursive = 3;
+}
+
+message StopWatchRequest {}
+message StopWatchResponse { bool ok = 1; }
+
+message FSEvent {
+  string path = 1;
+  FSEventOp op = 2;
+  int64 size_bytes = 3;
+  string mime_type = 4;
+  int64 timestamp_ms = 5;
+}
+
+enum FSEventOp {
+  FS_EVENT_OP_UNSPECIFIED = 0;
+  FS_EVENT_OP_CREATE = 1;
+  FS_EVENT_OP_WRITE = 2;
+  FS_EVENT_OP_REMOVE = 3;
+  FS_EVENT_OP_RENAME = 4;
+}
+
+// ─── FileMover ────────────────────────────────────────
+service FileMover {
+  rpc Move(MoveRequest) returns (MoveResponse);
+  rpc Copy(CopyRequest) returns (CopyResponse);
+}
+
+message MoveRequest {
+  string src = 1;
+  string dst = 2;
+  bool dry_run = 3;
+  bool overwrite = 4;
+}
+
+message MoveResponse {
+  bool ok = 1;
+  string error = 2;
+  string src = 3;
+  string dst = 4;
+  int64 size_bytes = 5;
+  string checksum = 6;
+  bool was_dry_run = 7;
+}
+
+message CopyRequest {
+  string src = 1;
+  string dst = 2;
+  bool dry_run = 3;
+  bool overwrite = 4;
+}
+
+message CopyResponse {
+  bool ok = 1;
+  string error = 2;
+  string src = 3;
+  string dst = 4;
+  int64 size_bytes = 5;
+  string checksum = 6;
+  bool was_dry_run = 7;
+}
+
+// ─── ContentExtract ───────────────────────────────────
+service ContentExtract {
+  rpc PreviewText(PreviewTextRequest) returns (PreviewTextResponse);
+  rpc ExtractPdfText(ExtractPdfTextRequest) returns (ExtractPdfTextResponse);
+  rpc ProbeMime(ProbeMimeRequest) returns (ProbeMimeResponse);
+}
+
+message PreviewTextRequest {
+  string path = 1;
+  int32 max_bytes = 2;
+}
+
+message PreviewTextResponse {
+  string text = 1;
+  string mime_type = 2;
+  int64 total_bytes = 3;
+  bool truncated = 4;
+}
+
+message ExtractPdfTextRequest {
+  string path = 1;
+  int32 max_pages = 2;
+}
+
+message ExtractPdfTextResponse {
+  string text = 1;
+  int32 page_count = 2;
+  bool truncated = 3;
+}
+
+message ProbeMimeRequest {
+  string path = 1;
+}
+
+message ProbeMimeResponse {
+  string mime_type = 1;
+  int64 size_bytes = 2;
+}
+
+// ─── Queue ────────────────────────────────────────────
+service Queue {
+  rpc Drain(DrainRequest) returns (DrainResponse);
+  rpc Stats(QueueStatsRequest) returns (QueueStatsResponse);
+}
+
+message DrainRequest {
+  int32 max_events = 1;
+}
+
+message DrainResponse {
+  repeated FSEvent events = 1;
+}
+
+message QueueStatsRequest {}
+
+message QueueStatsResponse {
+  int32 buffered = 1;
+  int32 total_seen = 2;
+  int64 oldest_ms = 3;
+}

@@ -20,4 +20,8 @@ __pycache__/
 poetry.lock
 .pytest_cache/
 botpy.log
+antbot-exec/bin/
+antbot-exec/api/gen/
+antbot/exec_bridge/gen/
+logs/
 

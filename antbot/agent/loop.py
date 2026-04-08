@@ -74,6 +74,7 @@ class AgentLoop:
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
+        exec_bridge: object | None = None,  # ExecBridgeManager (optional)
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
@@ -98,6 +99,7 @@ class AgentLoop:
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
+        self.exec_bridge = exec_bridge
         self.restrict_to_workspace = restrict_to_workspace
         self.tool_mode = tool_mode
         self.max_tools_per_request = max_tools_per_request
@@ -166,6 +168,11 @@ class AgentLoop:
         self.tools.register(SpaceAntTool())
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+        if self.exec_bridge:
+            from antbot.agent.tools.exec_bridge_tools import ExecHealthTool, ExecMoveTool, ExecCopyTool
+            self.tools.register(ExecHealthTool(self.exec_bridge))
+            self.tools.register(ExecMoveTool(self.exec_bridge))
+            self.tools.register(ExecCopyTool(self.exec_bridge))
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""

@@ -1,26 +1,40 @@
 # AntBot
 
-**A privacy-first AI agent that runs entirely on your machine.**
+**A privacy-first personal machine manager — runs entirely on your machine.**
 
 No cloud. No data leaving your network. No compromises.
 
-## Why This Exists
+## What AntBot Does
 
-I was using [NanoBot](https://github.com/HKUDS/nanobot) — a solid open-source AI agent with tool calling, chat channels, memory, the works. Then I looked at what it was actually sending to the cloud.
+AntBot started as a local AI agent (fork of [NanoBot](https://github.com/HKUDS/nanobot)). It's evolving into a **personal machine manager** — a distributed system that watches your files, organizes your downloads, backs up your machine state, and rebuilds everything from scratch when needed.
 
-**Everything.** Every file I opened, every shell command output, every directory listing. My invoices, employee documents, client proposals, network configs, private notes — all shipped off to Anthropic's servers through the tool-calling loop. Not because NanoBot is malicious — it's just how cloud-based agents work. The LLM needs context, so the agent sends it.
+### The Problem
 
-Here's the thing: I'm doing DevOps work on my own infrastructure. I'm reading private business documents. I don't want any of that going to a third party. Period.
+You work on many projects across multiple machines. You forget to commit code, downloads pile up, dotfiles drift between machines, and when you need to wipe a computer, you spend hours setting it back up. AntBot fixes all of that.
 
-So I forked NanoBot and built AntBot: **same capabilities, 100% local.**
+### The Solution
 
-You run an LLM on your own hardware (LM Studio, Exo, Ollama — whatever you prefer), and AntBot talks to it over localhost. Your files, your commands, your data — it all stays on your machine.
+```
+WATCH  →  CLASSIFY  →  ACT
+```
 
-Is it a bit slower than Claude or GPT-4? Yes. Is it 100% private? Also yes. That's the trade-off, and for me it's worth it.
+- **File triage**: Downloads, Desktop, Documents auto-sorted to NAS by rules
+- **Project lifecycle**: Git repos tracked, uncommitted code flagged, backups automatic
+- **System backup**: Dotfiles, SSH keys, brew packages, VS Code settings — continuously captured
+- **Machine rebuild**: One command restores a fresh Mac to your exact setup via Ansible
 
-## What It Can Do
+### Architecture: Go + Python
 
-AntBot comes with these tools built in:
+```
+Go   (antbot-exec)  =  Hands. File I/O, watching, syncing. Fast, tiny, bulletproof.
+Python (antbot)     =  Brain. Decisions, rules, LLM, Telegram, Ansible.
+```
+
+The Go binary handles all file operations via gRPC (unix socket). Python makes all decisions — which files to move, where, and when. If Python is down, Go buffers events and waits.
+
+LLM is optional. 95% of operations are deterministic pattern matching. When an LLM is needed (e.g., "is this PDF an invoice or a contract?"), requests route through [NautRouter](https://github.com/48Nauts-Operator/naut-router) for privacy-aware, cost-optimized model selection.
+
+## Built-in Tools
 
 | Tool | What It Does |
 |---|---|
@@ -30,143 +44,86 @@ AntBot comes with these tools built in:
 | `list_dir` | List directory contents with sizes, grouped by type |
 | `tree` | Recursive tree view with depth control |
 | `exec` | Run shell commands (with safety guards) |
-| `web_search` | Search the web via Brave Search API |
+| `web_search` | Search the web via Brave Search API or SearXNG |
 | `web_fetch` | Fetch and extract content from URLs |
 | `message` | Send messages to chat channels |
-| `cron` | Schedule tasks and reminders (cron expressions, intervals, one-shot) |
+| `cron` | Schedule tasks and reminders |
 | `spawn` | Run background subagents for parallel tasks |
 | `docker` | Inspect containers, logs, stats (read-only) |
 | `git` | Status, diff, log, branch, show (read-only) |
 | `http_request` | REST API testing (GET/POST/PUT/DELETE/PATCH) |
 | `process` | List processes, check ports (read-only) |
-| `space_ant` | Scan and clean disk waste (caches, ML models, Docker, Xcode, etc.) |
+| `space_ant` | Scan and clean disk waste (caches, ML models, Docker, Xcode) |
+| `file_move` | Move files via Go binary with checksum verification |
+| `file_copy` | Copy files via Go binary with checksum verification |
+| `exec_health` | Check Go binary health status |
 | **MCP** | Connect to any MCP-compatible tool server |
 
-Plus the full **Skills** system — drop a `SKILL.md` into `~/.antbot/workspace/skills/your-skill/` and AntBot picks it up automatically.
+Plus the **Skills** system — drop a `SKILL.md` into `~/.antbot/workspace/skills/your-skill/` and AntBot picks it up automatically.
 
-## What We Built On Top
+## What We Built On Top of NanoBot
 
-The baseline is [NanoBot](https://github.com/HKUDS/nanobot), which gives us the agent loop, tool registry, session management, chat channels, memory system, and MCP support. Solid foundation.
-
-But NanoBot was built for cloud models with massive context windows. Local models (8B-30B) have smaller windows and sometimes produce wonky JSON. So we added three layers:
+The baseline is [NanoBot](https://github.com/HKUDS/nanobot) — agent loop, tool registry, session management, chat channels, memory, MCP support. We added:
 
 ### Planner (`antbot/agent/planner.py`)
-
-Before executing anything, the Planner measures the task scope. If you ask "organize these 500 files by date," it doesn't stuff all 500 filenames into context. It:
-
-1. **Measures** — counts files, calculates total size, estimates tokens
-2. **Plans** — creates an execution plan with batches that fit the model's context window
-3. **Decides** — simple task (just run it) or complex (chunk it)
-
-Simple requests like "what time is it?" skip planning entirely. Zero overhead.
-
-*Inspired by the chunking patterns in [smolagents](https://github.com/huggingface/smolagents) — their code-first approach showed that fewer, focused LLM calls beat dumping everything into context.*
+Measures task scope before executing. Large jobs get chunked into batches that fit the model's context window.
 
 ### Guard (`antbot/agent/guard.py`)
-
-Every tool call gets a safety review before execution. Pattern-based, no second LLM needed:
-
-- **Blocks**: `rm -rf`, `DROP TABLE`, `kill -9`, `format`, `dd if=`, `chmod 777`, `curl | bash`
-- **Flags**: access to `.env`, credentials, private keys, `~/.ssh/`
-- **Checks output**: catches leaked API keys, passwords, private keys in tool results
-
-95% of dangerous operations match simple regex patterns. No need to burn tokens on a "safety LLM."
-
-*Concept borrowed from [PocketPaw](https://github.com/pocketpaw/pocketpaw) — their Guardian AI idea, but we implemented it as pure pattern matching instead of a second model.*
+Pattern-based safety review on every tool call. Blocks `rm -rf`, `DROP TABLE`, `curl | bash`, etc. No second LLM needed.
 
 ### Orchestrator (`antbot/agent/orchestrator.py`)
+Coordinates Planner → Guard → Executor. Each batch gets fresh context — small models can process large tasks.
 
-Coordinates the flow: Planner → Guard → Executor. For chunked tasks, each batch gets a **fresh context** — the model never accumulates stale data. Intermediate results are saved to disk and merged in a final synthesis step.
+### Exec Bridge (`antbot/exec_bridge/`)
+gRPC client for the Go binary. All file operations (move, copy, watch, sync) route through the Go binary for performance and reliability.
 
-This is what makes small local models viable for large tasks. A 27B model with a 32K context window can process 10,000 files — it just does it in batches.
+### Event Logger (`antbot/events/`)
+Append-only JSONL event logging. Every action is logged — file moves, rule matches, health checks. One file per day, automatic rotation.
 
 ### Dual-Mode Tool Calling (`antbot/agent/tools/strategy.py`)
-
-Not all local models support OpenAI-style function calling. AntBot auto-detects the model's capability and picks the right strategy:
-
-- **Native mode** — for models with built-in function calling (GPT, Claude, Qwen, Gemma 3). Tools are passed as OpenAI `tools` parameter. Zero overhead.
-- **ReAct mode** — for models without native tool support. Injects `Thought → Action → Observation` prompts and parses the model's text output into tool calls.
-
-Detection is automatic (`tool_mode: "auto"` in config), or you can force a mode. Smart tool selection scores tools by relevance to the user's message, so smaller models aren't overwhelmed with 15+ tool definitions.
-
-### DevOps Tools
-
-A suite of read-only inspection tools for infrastructure work:
-
-| Tool | Actions |
-|---|---|
-| `docker` | `ps`, `logs`, `inspect`, `stats` |
-| `git` | `status`, `diff`, `log`, `branch`, `show` |
-| `http_request` | `GET`, `POST`, `PUT`, `DELETE`, `PATCH` |
-| `process` | `list`, `ports`, `check` |
-| `space_ant` | `scan` (report waste), `clean` (remove safe targets) |
-
-All DevOps tools are categorized so smart tool selection picks them when relevant.
-
-### Space-Ant (`antbot/agent/tools/space_tool.py`)
-
-Disk space analyzer that scans for waste across multiple categories:
-
-- **Caches** — pip, npm, cargo, Homebrew, system caches
-- **ML Models** — EXO, Hugging Face, Ollama model downloads (per-model breakdown)
-- **Dev Artifacts** — `node_modules`, `__pycache__`, `.tox`, `.mypy_cache`
-- **Docker** — images, volumes, build cache
-- **Xcode** — iOS DeviceSupport, DerivedData, DocumentationCache
-- **Temp/Installers** — `.dmg`, `.pkg`, `.iso` in Downloads
-
-`scan` is read-only. `clean` requires `confirm=true` and handles Xcode caches, Docker prune, Homebrew cleanup, Ollama models, installers, temp files, and dev waste.
-
-> **Platform note:** Xcode and Homebrew cleanup is macOS-only. Docker, ML models, pip/npm, temp files, and dev artifacts work cross-platform (macOS + Linux).
+Auto-detects native function calling vs ReAct mode. 35+ local models classified.
 
 ### Fast-Path Dispatcher (`antbot/agent/fast_path.py`)
-
-Simple read-only queries (like `ls`, `git status`, `docker ps`, `disk usage`) are intercepted before they reach the LLM. Pattern matching routes them directly to the right tool — instant response, zero tokens spent.
-
-A write-intent gate prevents dangerous commands from bypassing the LLM's judgment. Keywords like `delete`, `remove`, `create` always go through the full agent loop.
-
-### JSON Repair (`antbot/utils/json_repair.py`)
-
-Local models occasionally produce malformed JSON in tool calls. Instead of failing, AntBot runs a 7-step repair pipeline:
-
-1. Try as-is
-2. Extract from markdown code blocks
-3. Find JSON start (`{` or `[`)
-4. Replace single quotes with double quotes
-5. Remove trailing commas
-6. Close unclosed braces/brackets
-7. Fall back to the `json-repair` library
-
-### Other ideas we liked
-
-- **[PicoAgents](https://github.com/borhen68/picoagents)** — entropy-based routing (ask the user when the model is uncertain). We haven't implemented this yet, but it's on the roadmap.
-- **[mini-swe-agent](https://github.com/princeton-nlp/SWE-agent)** — proved that bash-only agents with minimal tools can be surprisingly effective. Reinforced our "less is more" philosophy.
+Read-only queries (`ls`, `git status`, `docker ps`) bypass the LLM entirely. Instant response, zero tokens.
 
 ## Architecture
 
 ```
-User Request
-    |
-    v
-PLANNER --- Measures scope, creates execution plan
-    |        (skipped for simple requests)
-    v
-GUARD ----- Reviews tool calls for safety
-    |        (pattern-based, no second LLM)
-    v
-EXECUTOR -- Runs plan with context isolation per batch
-    |        (each batch gets fresh context)
-    v
-TOOLS ----- File ops | Shell | Web | MCP | Skills | Cron
-    |
-    v
-Response
+┌─────────── Each Machine ────────────────────────────┐
+│                                                       │
+│  antbot-exec (Go, ~14MB, launchd service)            │
+│  ├── File watcher (fsnotify / macOS fsevents)        │
+│  ├── File operations (move/copy + SHA256 verify)     │
+│  ├── Git operations (status/diff/commit/bundle)      │
+│  ├── System manifest (brew/pip/npm/docker export)    │
+│  ├── NAS health check                                │
+│  ├── Event queue (buffer when Python is down)        │
+│  └── gRPC server (unix socket only)                  │
+│            │                                          │
+│            │ gRPC                                     │
+│            ▼                                          │
+│  antbot (Python, existing 38k line codebase)         │
+│  ├── Rule engine (YAML-based file routing)           │
+│  ├── Exec bridge (gRPC client to Go binary)          │
+│  ├── Event logger (append-only JSONL)                │
+│  ├── Agent loop + Planner + Guard                    │
+│  ├── Telegram bot (notifications + approvals)        │
+│  ├── Ansible runner (playbook gen + provisioning)    │
+│  └── 12 chat channels, 10 skills, 18 tools          │
+│                                                       │
+│  NautRouter (Node, optional, launchd service)        │
+│  ├── Privacy-aware LLM routing                       │
+│  ├── LM Studio (local) / OpenRouter / Anthropic      │
+│  └── Real-time cost dashboard                        │
+│                                                       │
+└───────────────────────────���───────────────────────────┘
 ```
+
+All processes run as native **launchd** services. No Docker dependency.
 
 ## Quick Start
 
 ### 1. Get a local LLM running
-
-Pick one:
 
 | Backend | Setup | RAM Needed |
 |---|---|---|
@@ -182,42 +139,49 @@ cd antbot
 pip install -e .
 ```
 
-### 3. Configure
+### 3. Build the Go binary
+
+```bash
+cd antbot-exec
+make build    # compiles binary + generates gRPC stubs
+make install  # copies to ~/.antbot/bin/
+```
+
+### 4. Configure
 
 ```bash
 antbot onboard
 ```
 
-Or manually edit `~/.antbot/config.json`:
+Or manually edit `~/.antbot/config.json`. Key settings:
 
 ```json
 {
   "agents": {
     "defaults": {
-      "model": "mlx-community/GLM-4.7-Flash-4bit",
+      "model": "qwen3.5-4b",
       "provider": "custom"
     }
   },
   "providers": {
     "custom": {
       "apiKey": "local",
-      "apiBase": "http://localhost:52415/v1"
+      "apiBase": "http://localhost:1234/v1"
     }
   },
-  "tools": {
-    "web": {
-      "search": {
-        "searxngUrl": "http://your-searxng-instance:9017",
-        "apiKey": ""
-      }
-    }
+  "nas": {
+    "enabled": true,
+    "filesRoot": "/Volumes/devhub",
+    "backupRoot": "/Volumes/Tron/mpb_backup"
+  },
+  "execBridge": {
+    "enabled": true,
+    "socketPath": "/tmp/antbot.sock"
   }
 }
 ```
 
-Point `apiBase` at wherever your LLM is running (Exo, LM Studio, Ollama). For web search, set either `searxngUrl` (self-hosted SearXNG) or `apiKey` (Brave Search API).
-
-### 4. Run
+### 5. Run
 
 ```bash
 # Interactive chat
@@ -226,135 +190,81 @@ antbot agent
 # Single message
 antbot agent -m "List the files in my Downloads"
 
-# With debug logs
-antbot agent -m "Hello" --logs
+# Check exec bridge health
+antbot agent -m "Check antbot-exec health"
 ```
-
-### Slash Commands
-
-In interactive chat, these commands are available:
-
-| Command | What It Does |
-|---|---|
-| `/model` | Show current model, provider, and endpoint |
-| `/model list` | List all available models from endpoint (grouped tree view) |
-| `/model <name>` | Switch model at runtime (fuzzy matching — short names work) |
-| `/new` | Start a fresh conversation (archives memory) |
-| `/stop` | Cancel all running tasks |
-| `/help` | Show available commands |
-
-Model switching is instant — no restart needed. Short names resolve automatically (e.g. `/model GLM-4.7-Flash-4bit` finds `mlx-community/GLM-4.7-Flash-4bit`).
 
 ## Recommended Models
 
-For reliable tool calling, you need **20B+ active parameters**. MoE models with small active params (e.g. A3B = 3B active) struggle with multi-step reasoning.
+| Model | Size | Best For |
+|---|---|---|
+| Qwen 3.5 4B | ~2.5GB VRAM | File classification, commit messages, routing decisions |
+| Gemma 4 E4B | ~5GB VRAM | Fallback, multimodal document classification |
+| Qwen 3.5 9B | ~5GB VRAM | Complex scaffolding, multi-step reasoning |
 
-| Model | Size | Active Params | Best For |
-|---|---|---|---|
-| GLM-4.7-Flash-4bit | 18GB | ~18B (dense) | Everyday tasks, good tool calling, thinking capable |
-| Llama-3.3-70B-Instruct-4bit | 38GB | 70B (dense) | Complex reasoning, proven instruction following |
-| Qwen3-235B-A22B-4bit | 132GB | 22B (MoE) | Heavy multi-step tasks (via Exo cluster) |
-| Qwen3-Coder-Next-4bit | 43GB | dense | Code-focused tasks, structured output |
-| Gemma 3 27B | 18GB | 27B (dense) | Good all-rounder, solid tool calling |
-
-**Avoid for tool calling:** anything with A3B (3B active), or under 8B dense — too small for ReAct reasoning.
+For file management, the LLM is optional — 95% of operations use deterministic pattern matching.
 
 ## Chat Channels
 
-AntBot supports all the channels from NanoBot:
+CLI (built-in), Telegram, Discord, WhatsApp (via bridge), Slack, Matrix/Element, Email (IMAP/SMTP), Feishu/Lark, DingTalk.
 
-- **CLI** (built-in)
-- **Telegram**
-- **Discord**
-- **WhatsApp** (via bridge)
-- **Slack**
-- **Matrix/Element**
-- **Email** (IMAP/SMTP)
-- **Feishu/Lark**
-- **DingTalk**
-
-Enable any channel in `~/.antbot/config.json`. Each channel has its own allow-list for access control.
-
-## NanoBot vs AntBot
-
-| | NanoBot | AntBot |
-|---|---|---|
-| **LLM** | Cloud (Claude, GPT-4) | Local (LM Studio, Exo, Ollama) |
-| **Privacy** | Everything goes to cloud APIs | Nothing leaves your machine |
-| **Context** | Dump everything, hope it fits | Measure → Plan → Chunk → Execute |
-| **Safety** | Allow list per channel | Guard reviews every tool call |
-| **JSON** | Assumes perfect formatting | 7-step repair for local model quirks |
-| **Default** | Claude Opus | Whatever model you load locally |
+Enable any channel in `~/.antbot/config.json`.
 
 ## Project Structure
 
 ```
-antbot/
+antbot/                          # Python — decision layer
 ├── agent/
-│   ├── loop.py              # Core agent loop (executor + slash commands)
-│   ├── planner.py           # Task measurement and planning
-│   ├── guard.py             # Tool call safety review
-│   ├── orchestrator.py      # Planner → Guard → Executor flow
-│   ├── fast_path.py         # Regex-based fast-path dispatcher
-│   ├── context.py           # System prompt and context builder
-│   ├── memory.py            # Two-layer memory (MEMORY.md + HISTORY.md)
-│   ├── skills.py            # Extensible skills system
-│   ├── subagent.py          # Background subagent manager
+│   ├── loop.py                  # Core agent loop
+│   ├── planner.py               # Task measurement and planning
+│   ├── guard.py                 # Tool call safety review
+│   ├── orchestrator.py          # Planner → Guard → Executor
+│   ├── fast_path.py             # Read-only fast-path dispatcher
 │   └── tools/
-│       ├── strategy.py      # Native vs ReAct tool-calling strategies
-│       ├── react_prompt.py  # ReAct prompt templates
-│       ├── filesystem.py    # read, write, edit, list_dir, tree
-│       ├── shell.py         # exec (with safety guards)
-│       ├── web.py           # web_search (Brave + SearXNG), web_fetch
-│       ├── docker_tool.py   # Docker inspection (ps, logs, stats)
-│       ├── git_tool.py      # Git operations (status, diff, log)
-│       ├── http_tool.py     # HTTP requests (REST API testing)
-│       ├── process_tool.py  # Process and port inspection
-│       ├── space_tool.py    # Disk space analyzer + cleaner
-│       ├── mcp.py           # MCP server connections
-│       ├── cron.py          # Task scheduling
-│       ├── message.py       # Channel messaging
-│       ├── spawn.py         # Subagent spawning
-│       └── registry.py      # Tool registry with Guard integration
-├── providers/
-│   ├── local_detect.py      # Auto-detect model capabilities + tool support
-│   └── ...                  # LiteLLM + Custom + Azure provider system
-├── channels/                # Telegram, Discord, WhatsApp, Slack, etc.
-├── config/                  # Pydantic config schema
-├── utils/
-│   └── json_repair.py       # Fix malformed JSON from local models
-└── cli/
-    └── commands.py          # CLI interface (Typer)
+│       ├── exec_bridge_tools.py # Go binary tools (move, copy, health)
+│       ├── filesystem.py        # read, write, edit, list_dir, tree
+│       ├── shell.py             # exec (with safety guards)
+│       └── ...                  # 15+ more tools
+├── exec_bridge/                 # gRPC client for Go binary
+│   ├── client.py                # Async gRPC wrapper
+│   └── manager.py               # Go binary lifecycle
+├── events/                      # Append-only JSONL event logging
+│   ├── schema.py                # AntBotEvent dataclass
+│   └── logger.py                # JSONL writer with rotation
+├── channels/                    # 12 chat channel implementations
+├── config/                      # Pydantic config (NAS, rules, exec bridge)
+├── providers/                   # LM Studio, Ollama, cloud (via LiteLLM)
+└── cli/                         # Typer CLI
+
+antbot-exec/                     # Go — execution layer
+├── cmd/antbot-exec/main.go      # Entry point (unix socket gRPC server)
+├── internal/server/server.go    # Service implementations
+├── api/proto/antbot.proto       # gRPC service contracts
+└── Makefile                     # build, proto gen, test, install
 ```
+
+## Roadmap
+
+- [x] **Phase 0**: Contracts + integration scaffolding (Go binary, gRPC, config, events)
+- [ ] **Phase 1**: Deterministic Downloads triage (watcher, rule engine, move/copy)
+- [ ] **Phase 2**: Desktop triage + operational hardening
+- [ ] **Phase 3**: One-way machine backup (dotfiles, manifests)
+- [ ] **Phase 4**: Bootstrap + Ansible restore
+- [ ] **Phase 5**: Project protection (git bundle, commit-check)
+- [ ] **Phase 6**: Optional LLM classification
+- [ ] **Phase 7**: Multi-machine aggregation
+
+See the [full spec](https://github.com/48Nauts-Operator/antbot/tree/main/docs/) for detailed architecture and build plan.
 
 ## License
 
-Do whatever you want with this. Seriously.
+[WTFPL](http://www.wtfpl.net/) — Do What The Fuck You Want To Public License.
 
-This is released under the [WTFPL](http://www.wtfpl.net/) — Do What The Fuck You Want To Public License. Clone it, fork it, sell it, rebrand it, put it on a T-shirt. We don't care.
-
-The upstream NanoBot code is MIT licensed, which is compatible with doing whatever you want.
-
-```
-        DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-                    Version 2, December 2004
-
- Copyright (C) 2026 48Nauts-Operator
-
- Everyone is permitted to copy and distribute verbatim or modified
- copies of this license document, and changing it is allowed as long
- as the name is changed.
-
-            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
-   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
-
-  0. You just DO WHAT THE FUCK YOU WANT TO.
-```
+The upstream NanoBot code is MIT licensed.
 
 ## Credits
 
 - [NanoBot](https://github.com/HKUDS/nanobot) — the foundation (agent loop, tools, channels, memory)
-- [PocketPaw](https://github.com/pocketpaw/pocketpaw) — Guardian AI concept (our Guard layer)
+- [PocketPaw](https://github.com/pocketpaw/pocketpaw) — Guardian AI concept
 - [smolagents](https://github.com/huggingface/smolagents) — code-first efficiency patterns
-- [PicoAgents](https://github.com/borhen68/picoagents) — entropy-based routing concept
-- [Exo](https://github.com/exo-explore/exo) — distributed LLM inference across machines
+- [Exo](https://github.com/exo-explore/exo) — distributed LLM inference
