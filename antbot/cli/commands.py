@@ -1127,6 +1127,31 @@ def backup_cmd(
 
 
 # ============================================================================
+# Fleet (Multi-Machine)
+# ============================================================================
+
+@app.command("fleet")
+def fleet_cmd():
+    """Show status of all machines on NAS."""
+    from antbot.scout.aggregator import MachineAggregator
+
+    config = _load_config()
+    agg = MachineAggregator(config.nas.backup_root)
+    console.print(agg.format_dashboard())
+
+
+@app.command("fleet-sync")
+def fleet_sync_cmd():
+    """Build aggregated views from all machine event logs."""
+    from antbot.scout.aggregator import MachineAggregator
+
+    config = _load_config()
+    agg = MachineAggregator(config.nas.backup_root)
+    result = agg.build_views()
+    console.print(f"  [green]Views built:[/green] {result['machines']} machines, {result['projects']} projects")
+
+
+# ============================================================================
 # Project Protection
 # ============================================================================
 
