@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/python-ci.yml@main
+    with:
+      python-version: "3.11"
+      run-mypy: false
+
+  incident:
+    needs: ci
+    if: failure()
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-incident.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      assignees: jarvis
