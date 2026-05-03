@@ -19,3 +19,14 @@ jobs:
       token: ${{ secrets.GITHUB_TOKEN }}
     with:
       assignees: jarvis
+
+  ai-review:
+    if: github.event_name == 'pull_request'
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      lm-endpoint: http://cand0riacstudio:1238
+      model: qwen/qwen3.5-35b-a3b
+      max-tokens: 3000
+      focus: "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
