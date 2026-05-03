@@ -1,0 +1,20 @@
+name: Auto-scan
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"          # every Monday at 06:00 UTC
+  workflow_dispatch:              # also runnable on demand from the Actions UI
+
+jobs:
+  scan:
+    uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-scan.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+    with:
+      stack: python
+      lm-endpoint: http://cand0riacstudio:1238
+      model: qwen/qwen3.5-35b-a3b
+      ai-scan: true
+      auto-fix: true
+      max-files-for-ai: 30
+      assignees: jarvis
