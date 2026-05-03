@@ -2,18 +2,21 @@ name: Auto-scan
 
 on:
   schedule:
-    - cron: "0 6 * * 1"          # every Monday at 06:00 UTC
-  workflow_dispatch:              # also runnable on demand from the Actions UI
+    - cron: "0 6 * * 1"          # Monday 06:00 UTC
+  workflow_dispatch:
 
 jobs:
   scan:
     uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_auto-scan.yml@main
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     with:
       stack: python
-      lm-endpoint: http://cand0riacstudio:1238
-      model: qwen/qwen3.5-35b-a3b
+      provider:    ${{ vars.AI_PROVIDER || 'local' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://host.docker.internal:1238' }}
+      model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
       ai-scan: true
       auto-fix: true
       max-files-for-ai: 30

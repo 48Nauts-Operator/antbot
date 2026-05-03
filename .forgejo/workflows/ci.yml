@@ -25,8 +25,11 @@ jobs:
     uses: 48Nauts/forgejo-ci-workflow/.forgejo/workflows/_ai-review.yml@main
     secrets:
       token: ${{ secrets.GITHUB_TOKEN }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     with:
-      lm-endpoint: http://cand0riacstudio:1238
-      model: qwen/qwen3.5-35b-a3b
-      max-tokens: 3000
-      focus: "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
+      provider:    ${{ vars.AI_PROVIDER || 'local' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://host.docker.internal:1238' }}
+      model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
+      max-tokens:  3000
+      focus:       "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
