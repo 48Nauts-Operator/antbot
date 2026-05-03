@@ -123,7 +123,25 @@ All processes run as native **launchd** services. No Docker dependency.
 
 ## Quick Start
 
-### 1. Get a local LLM running
+### 1. Install AntBot — one command
+
+```bash
+curl -fsSL https://github.com/48Nauts-Operator/antbot/raw/main/install.sh | bash
+```
+
+Handles everything in one shot: Homebrew deps (`go`, `protobuf`, `uv`), Go protoc plugins + PATH setup, source clone (to `~/Developer/antbot` by default), Python 3.11 venv, package install, and the Go binary build.
+
+After install:
+```bash
+cd ~/Developer/antbot
+source .venv/bin/activate
+antbot onboard          # interactive config
+antbot agent            # start chat
+```
+
+To update later: `cd ~/Developer/antbot && just update` — or rerun the curl command (idempotent).
+
+### 2. Get a local LLM running
 
 | Backend | Setup | RAM Needed |
 |---|---|---|
@@ -131,27 +149,39 @@ All processes run as native **launchd** services. No Docker dependency.
 | **[Exo](https://github.com/exo-explore/exo)** | `pip install exo`, run `exo` on each machine | Pools across machines |
 | **[Ollama](https://ollama.com)** | `brew install ollama && ollama run gemma3` | 8-64GB |
 
-### 2. Install AntBot
-
-```bash
-git clone git@github.com:48Nauts-Operator/antbot.git
-cd antbot
-pip install -e .
-```
-
-### 3. Build the Go binary
-
-```bash
-cd antbot-exec
-make build    # compiles binary + generates gRPC stubs
-make install  # copies to ~/.antbot/bin/
-```
-
-### 4. Configure
+### 3. Configure
 
 ```bash
 antbot onboard
 ```
+
+---
+
+### Manual install (for hackers / contributors)
+
+If you'd rather see what's happening, the installer is just these steps:
+
+```bash
+# Prereqs (one-time)
+brew install go protobuf uv
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+export PATH="$HOME/go/bin:$PATH"
+
+# Source
+git clone git@github.com:48Nauts-Operator/antbot.git
+cd antbot
+
+# Python (uv handles the 3.11 download if needed)
+uv venv --python 3.11
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+
+# Go binary
+cd antbot-exec && make build && make install && cd ..
+```
+
+For Matrix bot with end-to-end encryption: `brew install libolm cmake && uv pip install -e ".[matrix]"`
 
 Or manually edit `~/.antbot/config.json`. Key settings:
 

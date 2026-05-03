@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] - 2026-05-03
+
+### Added
+- **One-line installer (`install.sh`)** — `curl -fsSL .../install.sh | bash` handles all prereqs, source clone, Python venv, and Go binary build
+- **Forgejo CI scaffolding** in `.forgejo/workflows/` — uses reusable workflows from `48Nauts/forgejo-ci-workflow` (lint/test, auto-incident on failure, branch tracking issues)
+- **Standard issue templates** (bug/feature/incident/chore) and PR template under `.forgejo/`
+- **`justfile`** with project-standard recipes — `push`, `update`, `lint`, `fix`, `test`, `open`, `ci`, `feature`, `fix-branch`, `incident`
+- Mirror to private Forgejo at `48Nauts/AntBot` via Tailscale (alongside GitHub `48Nauts-Operator/antbot`)
+
+### Changed
+- **`pyproject.toml` `[dev]` extra** cleaned up — removed `matrix-nio[e2e]`, `mistune`, `nh3` (they belong in `[matrix]` only). `dev` is now just `pytest`, `pytest-asyncio`, `ruff` — installable on a fresh Mac without `libolm`/`cmake`.
+- README leads with the one-line installer; manual install demoted to "for hackers/contributors"
+
+### Fixed
+- New users no longer hit the `python-olm` build wall just to install dev deps
+
 ## [0.1.4.post3] - 2026-04-04
 
 ### Added
@@ -20,5 +36,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Provider routing via LiteLLM
 - Channel system (Telegram, Discord, CLI)
 
+[0.2.0]: https://github.com/48Nauts-Operator/antbot/releases/tag/v0.2.0
 [0.1.4.post3]: https://github.com/48Nauts-Operator/antbot/releases/tag/v0.1.4.post3
 [0.1.4]: https://github.com/48Nauts-Operator/antbot/releases/tag/v0.1.4

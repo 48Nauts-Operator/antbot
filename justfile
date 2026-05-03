@@ -26,6 +26,18 @@ push-github:
 pull:
     git pull --rebase forgejo
 
+# ─── Update / upgrade installed AntBot ─────────────────────────
+
+# Self-update an installed AntBot: pull latest source, refresh deps, rebuild Go binary
+update:
+    git pull --ff-only
+    @echo "→ Refreshing Python deps..."
+    .venv/bin/python -m pip install --upgrade pip uv 2>/dev/null || true
+    .venv/bin/uv pip install -e ".[dev]" || (uv pip install -e ".[dev]")
+    @echo "→ Rebuilding Go binary..."
+    cd antbot-exec && make build && make install
+    @echo "✓ Update complete. Restart any running antbot session."
+
 # ─── Open in browser ────────────────────────────────────────────
 
 # Open the Forgejo repo
