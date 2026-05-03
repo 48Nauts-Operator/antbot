@@ -15,7 +15,7 @@ jobs:
     with:
       stack: python
       provider:    ${{ vars.AI_PROVIDER || 'local' }}
-      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://host.docker.internal:1238' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://100.108.101.97:1238' }}
       model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
       ai-scan: true
       auto-fix: true

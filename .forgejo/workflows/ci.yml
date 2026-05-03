@@ -29,7 +29,7 @@ jobs:
       anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
     with:
       provider:    ${{ vars.AI_PROVIDER || 'local' }}
-      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://host.docker.internal:1238' }}
+      lm-endpoint: ${{ vars.AI_LM_ENDPOINT || 'http://100.108.101.97:1238' }}
       model:       ${{ vars.AI_MODEL || 'qwen/qwen3.5-35b-a3b' }}
       max-tokens:  3000
       focus:       "bugs, security, async/concurrency mistakes, unclear naming, missing tests"
