@@ -1,6 +1,6 @@
 [project]
 name = "antbot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Privacy-first personal AI agent — runs entirely on local LLMs"
 requires-python = ">=3.11"
 license = {text = "WTFPL"}
@@ -60,9 +60,6 @@ dev = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",
     "ruff>=0.1.0",
-    "matrix-nio[e2e]>=0.25.2",
-    "mistune>=3.0.0,<4.0.0",
-    "nh3>=0.2.17,<1.0.0",
 ]
 
 [project.scripts]
